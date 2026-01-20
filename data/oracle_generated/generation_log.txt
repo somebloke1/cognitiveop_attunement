@@ -1,0 +1,153 @@
+======================================================================
+ORACLE TRAINING DATA GENERATION
+======================================================================
+
+Configuration:
+  Domains: ['mathematical', 'empirical', 'common_sense', 'pop_science', 'philosophic']
+  Difficulties: ['easy', 'medium', 'hard']
+  Judgment types: ['Yes', 'No', 'Insufficient']
+  Examples per cell: 3
+  Total cells: 45
+  Target examples: 135
+  Verification: True
+  Output: data/oracle_generated/judgment_training_full.jsonl
+
+----------------------------------------------------------------------
+Generating 135 examples across 45 cells...
+  mathematical/easy/Yes: 3 examples
+  mathematical/easy/No: 3 examples
+  mathematical/easy/Insufficient: 3 examples
+  mathematical/medium/Yes: 3 examples
+  mathematical/medium/No: 3 examples
+  mathematical/medium/Insufficient: 3 examples
+  mathematical/hard/Yes: 3 examples
+  mathematical/hard/No: 3 examples
+  mathematical/hard/Insufficient: 3 examples
+  empirical/easy/Yes: 3 examples
+  empirical/easy/No: 3 examples
+  empirical/easy/Insufficient: 3 examples
+  empirical/medium/Yes: 3 examples
+  empirical/medium/No: 3 examples
+  empirical/medium/Insufficient: 3 examples
+  Verification failed for empirical/hard/Yes
+  Verification failed for empirical/hard/Yes
+  Verification failed for empirical/hard/Yes
+  Verification failed for empirical/hard/Yes
+  Verification failed for empirical/hard/Yes
+  Verification failed for empirical/hard/Yes
+  Verification failed for empirical/hard/Yes
+  Verification failed for empirical/hard/Yes
+  Verification failed for empirical/hard/Yes
+  empirical/hard/Yes: 0 examples
+  empirical/hard/No: 3 examples
+  empirical/hard/Insufficient: 3 examples
+  common_sense/easy/Yes: 3 examples
+  common_sense/easy/No: 3 examples
+  common_sense/easy/Insufficient: 3 examples
+  common_sense/medium/Yes: 3 examples
+  common_sense/medium/No: 3 examples
+  Verification failed for common_sense/medium/Insufficient
+  Verification failed for common_sense/medium/Insufficient
+  Verification failed for common_sense/medium/Insufficient
+  Verification failed for common_sense/medium/Insufficient
+  Verification failed for common_sense/medium/Insufficient
+  Verification failed for common_sense/medium/Insufficient
+  Verification failed for common_sense/medium/Insufficient
+  Verification failed for common_sense/medium/Insufficient
+  Verification failed for common_sense/medium/Insufficient
+  common_sense/medium/Insufficient: 0 examples
+  Verification failed for common_sense/hard/Yes
+  Verification failed for common_sense/hard/Yes
+  Verification failed for common_sense/hard/Yes
+  Verification failed for common_sense/hard/Yes
+  Verification failed for common_sense/hard/Yes
+  Verification failed for common_sense/hard/Yes
+  Verification failed for common_sense/hard/Yes
+  Verification failed for common_sense/hard/Yes
+  Verification failed for common_sense/hard/Yes
+  common_sense/hard/Yes: 0 examples
+  common_sense/hard/No: 3 examples
+  Verification failed for common_sense/hard/Insufficient
+  Verification failed for common_sense/hard/Insufficient
+  Verification failed for common_sense/hard/Insufficient
+  Verification failed for common_sense/hard/Insufficient
+  Verification failed for common_sense/hard/Insufficient
+  Verification failed for common_sense/hard/Insufficient
+  Verification failed for common_sense/hard/Insufficient
+  Verification failed for common_sense/hard/Insufficient
+  Verification failed for common_sense/hard/Insufficient
+  common_sense/hard/Insufficient: 0 examples
+  pop_science/easy/Yes: 3 examples
+  pop_science/easy/No: 3 examples
+  pop_science/easy/Insufficient: 3 examples
+  pop_science/medium/Yes: 3 examples
+  pop_science/medium/No: 3 examples
+  pop_science/medium/Insufficient: 3 examples
+  pop_science/hard/Yes: 3 examples
+  Verification failed for pop_science/hard/No
+  Verification failed for pop_science/hard/No
+  Verification failed for pop_science/hard/No
+  Verification failed for pop_science/hard/No
+  Verification failed for pop_science/hard/No
+  Verification failed for pop_science/hard/No
+  Verification failed for pop_science/hard/No
+  Verification failed for pop_science/hard/No
+  Verification failed for pop_science/hard/No
+  pop_science/hard/No: 0 examples
+  pop_science/hard/Insufficient: 3 examples
+  philosophic/easy/Yes: 3 examples
+  Verification failed for philosophic/easy/No
+  Verification failed for philosophic/easy/No
+  Verification failed for philosophic/easy/No
+  Verification failed for philosophic/easy/No
+  Verification failed for philosophic/easy/No
+  Verification failed for philosophic/easy/No
+  Verification failed for philosophic/easy/No
+  Verification failed for philosophic/easy/No
+  Verification failed for philosophic/easy/No
+  philosophic/easy/No: 0 examples
+  philosophic/easy/Insufficient: 3 examples
+  philosophic/medium/Yes: 3 examples
+  Verification failed for philosophic/medium/No
+  Verification failed for philosophic/medium/No
+  Verification failed for philosophic/medium/No
+  Verification failed for philosophic/medium/No
+  Verification failed for philosophic/medium/No
+  Verification failed for philosophic/medium/No
+  Verification failed for philosophic/medium/No
+  Verification failed for philosophic/medium/No
+  Verification failed for philosophic/medium/No
+  philosophic/medium/No: 0 examples
+  philosophic/medium/Insufficient: 3 examples
+  philosophic/hard/Yes: 3 examples
+  philosophic/hard/No: 3 examples
+  philosophic/hard/Insufficient: 3 examples
+Generated 114 total examples
+Saved to data/oracle_generated/judgment_training_full.jsonl
+
+======================================================================
+GENERATION COMPLETE
+======================================================================
+
+Total examples generated: 114
+
+By domain:
+  common_sense: 18
+  empirical: 24
+  mathematical: 27
+  philosophic: 21
+  pop_science: 24
+
+By judgment type:
+  Insufficient: 15
+  No: 69
+  Yes: 30
+
+Verification:
+  Passed: 114/114 (100.0%)
+
+By confidence:
+  high: 111
+  medium: 3
+
+Data saved to: data/oracle_generated/judgment_training_full.jsonl

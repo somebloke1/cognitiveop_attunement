@@ -1,0 +1,62 @@
+======================================================================
+LEVEL-THEMED CHALLENGE GENERATION
+======================================================================
+
+Configuration:
+  Levels: ['attention', 'understanding', 'judgment', 'decision']
+  Domains: ['mathematical', 'empirical', 'common_sense', 'pop_science', 'philosophic']
+  Difficulties: ['medium', 'hard']
+  Challenges per cell: 1
+  Target: 40 challenges
+
+----------------------------------------------------------------------
+  attention/mathematical/medium: 1 challenges
+  attention/mathematical/hard: 1 challenges
+  attention/empirical/medium: 1 challenges
+  attention/empirical/hard: 1 challenges
+  attention/common_sense/medium: 1 challenges
+  attention/common_sense/hard: 1 challenges
+  attention/pop_science/medium: 1 challenges
+  attention/pop_science/hard: 1 challenges
+  attention/philosophic/medium: 1 challenges
+  attention/philosophic/hard: 1 challenges
+  understanding/mathematical/medium: 1 challenges
+  understanding/mathematical/hard: 1 challenges
+  understanding/empirical/medium: 1 challenges
+  understanding/empirical/hard: 1 challenges
+  understanding/common_sense/medium: 1 challenges
+  understanding/common_sense/hard: 1 challenges
+  understanding/pop_science/medium: 1 challenges
+  understanding/pop_science/hard: 1 challenges
+  understanding/philosophic/medium: 1 challenges
+  understanding/philosophic/hard: 1 challenges
+  judgment/mathematical/medium: 1 challenges
+  judgment/mathematical/hard: 1 challenges
+  judgment/empirical/medium: 1 challenges
+  judgment/empirical/hard: 1 challenges
+  judgment/common_sense/medium: 1 challenges
+  judgment/common_sense/hard: 1 challenges
+  judgment/pop_science/medium: 1 challenges
+  judgment/pop_science/hard: 1 challenges
+  judgment/philosophic/medium: 1 challenges
+  judgment/philosophic/hard: 1 challenges
+  decision/mathematical/medium: 1 challenges
+  decision/mathematical/hard: 1 challenges
+  decision/empirical/medium: 1 challenges
+  decision/empirical/hard: 1 challenges
+  decision/common_sense/medium: 1 challenges
+  decision/common_sense/hard: 1 challenges
+  decision/pop_science/medium: 1 challenges
+  decision/pop_science/hard: 1 challenges
+  decision/philosophic/medium: 1 challenges
+  decision/philosophic/hard: 1 challenges
+
+Generated 40 total challenges
+Saved to data/oracle_generated/level_themed_challenges.jsonl
+
+======================================================================
+SUMMARY
+======================================================================
+
+By vulnerability level: {'attention': 10, 'understanding': 10, 'judgment': 10, 'decision': 10}
+By domain: {'mathematical': 8, 'empirical': 8, 'common_sense': 8, 'pop_science': 8, 'philosophic': 8}
