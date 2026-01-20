@@ -199,15 +199,46 @@ Read `docs/lonergan_synopsis.md` if philosophical context is needed.
 **Your Task**: Integrate the test architecture modules into the training pipeline.
 
 ### Step 1: Analyze Current Data Coverage
+
+**DATA FORMAT NOTE**: Existing data has fields nested in `metadata`, not top-level:
+```python
+# Example structure:
+{
+    "messages": [...],
+    "metadata": {
+        "domain": "mathematical",
+        "judgment_type": "Yes",  # This is expected_judgment
+        "difficulty": "medium",  # String, not int - needs mapping
+        ...
+    }
+}
+```
+
+You'll need to either:
+1. Update coverage analyzer to read from metadata, OR
+2. Transform data to flat format first
+
 ```python
 from src.coverage.analyzer import CoverageAnalyzer
 import json
 
-# Load existing data
+# Load and transform existing data
+DIFFICULTY_MAP = {"introductory": 1, "easy": 2, "medium": 3, "hard": 4, "expert": 5}
+
 examples = []
 with open("data/oracle_generated/judgment_train.jsonl") as f:
     for line in f:
-        examples.append(json.loads(line))
+        raw = json.loads(line)
+        meta = raw.get("metadata", {})
+        # Note: analyzer expects "judgment" (capitalized), not "expected_judgment"
+        JUDGMENT_MAP = {"yes": "Yes", "no": "No", "insufficient": "Insufficient"}
+        jtype = meta.get("judgment_type", "").lower()
+        examples.append({
+            "domain": meta.get("domain"),
+            "judgment": JUDGMENT_MAP.get(jtype, jtype),  # Must be capitalized
+            "difficulty": DIFFICULTY_MAP.get(meta.get("difficulty"), 3),
+            "has_distractor": False  # Current data has no distractors
+        })
 
 # Analyze coverage
 analyzer = CoverageAnalyzer()
@@ -223,7 +254,13 @@ from src.generation.distractor_generator import generate_distractors_for_example
 ```
 
 ### Step 3: Fill Coverage Gaps
-Target: >80% of 150 cells (currently estimated ~38%)
+**Current baseline**: 23.3% coverage (35/150 cells filled)
+Target: >80% of 150 cells
+
+**Key gaps**:
+- ALL distractor cells are empty (has_distractor=True)
+- Several domain/judgment combinations have no examples
+- Difficulties 1 and 5 are underrepresented
 
 ### Step 4: Wire Enhanced Reward
 Replace reward function in `scripts/run_trl_grpo.py`:
@@ -239,10 +276,14 @@ Create `scripts/run_enhanced_training.py` that orchestrates:
 4. Run GRPO with enhanced reward
 
 ### Success Criteria
-- [ ] Coverage increases from ~38% to >80% of 150 cells
-- [ ] 30% of training data has contrastive distractors
+- [ ] Coverage increases from 23.3% to >80% of 150 cells
+- [ ] 30% of training data has contrastive distractors (fills all distractor=True cells)
 - [ ] Enhanced reward function integrated
 - [ ] Training runs end-to-end with improved data
+
+### User Notes
+- **Gemini Pro 3** should be used for all synthetic test generation (API key in `.env`)
+- Research the exact model name if needed
 
 ### Key Files to Read First
 1. `docs/implementation_plan.md` - Full architecture
