@@ -327,6 +327,27 @@ Different genera (physics, chemistry, biology, psychology) have different sets o
 | `invulnerability.py` | Four-level vulnerability detection (attention/understanding/judgment/decision) |
 | `training.py` | GRPO and MIPROv2 training functions |
 
+### Test Architecture Modules (NEW - 2026-01-20)
+
+| Module | Purpose |
+|--------|---------|
+| `src/schema/extended_schema.py` | Enhanced dataclasses: EnhancedJudgmentSample, StudentPacket, EvaluatorPacket, CoverageCell |
+| `src/coverage/analyzer.py` | 150-cell coverage matrix (5 domains × 3 judgments × 5 difficulties × 2 distractor states) |
+| `src/training/evidence_grounding.py` | Citation extraction and validation against input text |
+| `src/generation/distractor_generator.py` | Contrastive learning: P2/P3 detection, misaligned_phase, inverted_judgment distractors |
+| `src/training/enhanced_reward.py` | Correctness-dominant multiplicative reward function |
+
+### Test Suite (`tests/`)
+
+| File | Tests | Purpose |
+|------|-------|---------|
+| `test_schema.py` | 100 | Schema validation, dual-packet separation, coverage cell IDs |
+| `test_coverage.py` | 46 | Coverage matrix building, gap detection, percentage calculation |
+| `test_evidence.py` | 64 | Citation extraction, exact/fuzzy matching, numeric validation |
+| `test_reward.py` | 54 | Reward scoring, multiplicative gating, TRL interface |
+| `generation/test_distractor_generator.py` | 67 | P2/P3 language detection, distractor generation |
+| **Total** | **331** | All tests pass |
+
 ### Training Scripts (`scripts/`)
 
 | Script | Purpose |
@@ -389,11 +410,19 @@ Different genera (physics, chemistry, biology, psychology) have different sets o
 11. ~~Validate local Qwen inference (5.18 GB VRAM)~~ ✓
 12. ~~Generate large dataset (450 verified examples)~~ ✓
 13. ~~Validate TRL GRPO training pipeline (20-step test)~~ ✓
-14. **NEXT**: Extended GRPO training (100+ steps) for judgment adapter
-15. Evaluate trained adapter on held-out test set
-16. Train adapters for other cognitive levels (Attention, Understanding, Decision)
-17. Design network architecture (feedback loops, not just pipeline)
-18. Add output constraints for questions of reflection (finite answer set)
+14. ~~Fix reward function (correctness-dominant with multiplicative gating)~~ ✓
+15. ~~Research external test framework (NX tokens, distractors, coverage matrix)~~ ✓
+16. ~~Implement test architecture modules (331 TDD tests passing)~~ ✓
+17. **NEXT**: Build full enhanced training pipeline (integration script)
+18. Run coverage analyzer on existing 450 examples
+19. Generate contrastive distractors (target: 30% of training data)
+20. Fill coverage gaps (target: >80% of 150 cells)
+21. Wire enhanced reward into training script
+22. Extended GRPO training with enhanced data
+23. Evaluate trained adapter on held-out test set
+24. Train adapters for other cognitive levels (Attention, Understanding, Decision)
+25. Design network architecture (feedback loops, not just pipeline)
+26. Add output constraints for questions of reflection (finite answer set)
 
 ## Decisions Log
 
@@ -434,6 +463,13 @@ Different genera (physics, chemistry, biology, psychology) have different sets o
 - **2026-01-20**: Key insight: "Insufficient" should NOT get bonus - only correct when evidence genuinely insufficient, not rewarded for passivity.
 - **2026-01-20**: Discussed data limitations: currently training toward Gemini as oracle. Valid as proof-of-concept; proper human-labeled test set needed for independent verification.
 - **2026-01-20**: User reached out to Jeremy Avigad (ICARM director) and advisor re: cognitive operation datasets.
+- **2026-01-20**: Deep-dived external test framework (CSV with Lonergan sources, NX tokens, distractors). Extracted 10 insights for test architecture improvement.
+- **2026-01-20**: Applied critical reflection (virtually unconditioned) to insights: 6 YES (conditions fulfilled), 4 INSUFFICIENT.
+- **2026-01-20**: Created unified implementation plan (docs/implementation_plan.md) with 5 modules.
+- **2026-01-20**: TDD approach: wrote 331 tests across 5 test files BEFORE implementation.
+- **2026-01-20**: Implemented all 5 modules: extended_schema, coverage analyzer, evidence_grounding, distractor_generator, enhanced_reward.
+- **2026-01-20**: All 331 tests pass. Modules tested in isolation, NOT YET wired into training pipeline.
+- **2026-01-20**: Key insight from research: Contrastive distractors (especially `misaligned_phase`) essential for P2/P3 differentiation. Coverage matrix prevents dataset clustering.
 
 </dynamic_formal_growth>
 </claude-md-section>

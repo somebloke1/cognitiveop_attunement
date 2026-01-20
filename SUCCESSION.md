@@ -1,19 +1,22 @@
 # Succession Notes for Next Agent
 
-*Last updated: 2026-01-20*
+*Last updated: 2026-01-20 (Session 2)*
 
 ## Immediate Context
 
-**IMPORTANT**: The reward function was significantly improved on 2026-01-20. Future training runs should use the updated `scripts/run_trl_grpo.py`.
+**IMPORTANT**: Test architecture improvements have been implemented (331 TDD tests passing). The modules are tested in isolation but **NOT YET WIRED** into the training pipeline.
+
+**NEXT TASK**: Build the full enhanced training pipeline (see "Successor Agent Prompt" at bottom).
 
 ## Project State Summary
 
-The Cognitive Organism training pipeline has a **corrected reward function**:
+The Cognitive Organism project has:
 
-1. **Oracle Pipeline**: Gemini-based data generation with multi-tier verification working
-2. **Dataset**: 450 verified examples ready (405 train, 45 val)
-3. **GRPO Training**: TRL-based pipeline with **correctness-dominant reward function**
-4. **Key Fix**: Reward function now uses expected_judgment from training data, not just structural markers
+1. **Oracle Pipeline**: Gemini-based data generation with multi-tier verification ✓
+2. **Dataset**: 450 verified examples (405 train, 45 val) ✓
+3. **GRPO Training**: TRL-based with correctness-dominant reward ✓
+4. **Test Architecture Modules** (NEW): 5 modules, 331 tests passing ✓
+5. **Integration**: **NOT DONE** - modules exist but not wired into training
 
 ## Critical Change: Reward Function (2026-01-20)
 
@@ -81,10 +84,28 @@ CUDA_VISIBLE_DEVICES=0 python scripts/run_trl_grpo.py \
 | File | Purpose |
 |------|---------|
 | `scripts/run_trl_grpo.py` | Main training script |
-| `data/oracle_generated/judgment_train.jsonl` | Training data |
+| `data/oracle_generated/judgment_train.jsonl` | Training data (450 examples) |
 | `models/judgment_grpo_test/` | First successful adapter |
-| `docs/training_experiments.md` | Training log |
 | `CLAUDE.md` | Project state and philosophy |
+
+### New Test Architecture Modules (2026-01-20)
+
+| Module | Purpose |
+|--------|---------|
+| `src/schema/extended_schema.py` | EnhancedJudgmentSample, StudentPacket, EvaluatorPacket, CoverageCell |
+| `src/coverage/analyzer.py` | 150-cell coverage matrix, gap detection |
+| `src/training/evidence_grounding.py` | Citation extraction and validation |
+| `src/generation/distractor_generator.py` | P2/P3 distractors for contrastive learning |
+| `src/training/enhanced_reward.py` | Multiplicative gating reward (use THIS, not run_trl_grpo.py's) |
+
+### Documentation
+
+| File | Purpose |
+|------|---------|
+| `docs/test_framework_research_synthesis.md` | Research findings from external framework |
+| `docs/test_architecture_insights.md` | 10 insights extracted |
+| `docs/insights_critical_reflection.md` | Critical reflection (6 YES, 4 INSUFFICIENT) |
+| `docs/implementation_plan.md` | Unified implementation plan |
 
 ## How to Test the Trained Adapter
 
@@ -170,3 +191,61 @@ The virtually unconditioned: A judgment is warranted when conditions are fulfill
 - Insufficient = cannot determine fulfillment
 
 Read `docs/lonergan_synopsis.md` if philosophical context is needed.
+
+---
+
+## Successor Agent Prompt: Build the Full Training Pipeline
+
+**Your Task**: Integrate the test architecture modules into the training pipeline.
+
+### Step 1: Analyze Current Data Coverage
+```python
+from src.coverage.analyzer import CoverageAnalyzer
+import json
+
+# Load existing data
+examples = []
+with open("data/oracle_generated/judgment_train.jsonl") as f:
+    for line in f:
+        examples.append(json.loads(line))
+
+# Analyze coverage
+analyzer = CoverageAnalyzer()
+report = analyzer.analyze(examples)
+print(f"Coverage: {report.coverage_percentage:.1f}%")
+print(f"Gaps: {len(report.gaps)}")
+```
+
+### Step 2: Generate Contrastive Distractors
+```python
+from src.generation.distractor_generator import generate_distractors_for_example
+# Target: 30% of training data should have contrastive distractors
+```
+
+### Step 3: Fill Coverage Gaps
+Target: >80% of 150 cells (currently estimated ~38%)
+
+### Step 4: Wire Enhanced Reward
+Replace reward function in `scripts/run_trl_grpo.py`:
+```python
+from src.training.enhanced_reward import reward_fn
+```
+
+### Step 5: Create Integration Script
+Create `scripts/run_enhanced_training.py` that orchestrates:
+1. Load and analyze coverage
+2. Generate distractors
+3. Fill gaps
+4. Run GRPO with enhanced reward
+
+### Success Criteria
+- [ ] Coverage increases from ~38% to >80% of 150 cells
+- [ ] 30% of training data has contrastive distractors
+- [ ] Enhanced reward function integrated
+- [ ] Training runs end-to-end with improved data
+
+### Key Files to Read First
+1. `docs/implementation_plan.md` - Full architecture
+2. `src/training/enhanced_reward.py` - New reward function
+3. `src/coverage/analyzer.py` - Coverage analysis
+4. `src/generation/distractor_generator.py` - Distractor generation
