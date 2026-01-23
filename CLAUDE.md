@@ -556,14 +556,15 @@ Different genera (physics, chemistry, biology, psychology) have different sets o
   - Rewrote `src/evaluation/logging_config.py` with per-component QueueHandler for async-safe logging
   - **Decision**: Abandon custom pipelined trainer (`pipelined_trainer.py`), return to TRL-based `run_enhanced_training.py` which works correctly
   - Key insight: TRL's internal generation during training works fine; only our manual .generate() calls were slow
-- **2026-01-23**: **SESSION 7 - PIPELINED TRAINER V2 + LONERGAN EVALUATOR**: Built native pipelined trainer and enhanced evaluator.
+- **2026-01-23**: **SESSION 7 - PIPELINED TRAINER V2 + LONERGAN EVALUATOR + REVERSION**: Built native pipelined trainer, enhanced evaluator, restored critical signal.
   - Built `pipelined_trainer_v2.py`: Native model loading (no TRL), cross-step pipelining (Gemini async while generating next step), gradient checkpointing toggle
   - Solved training instability: token normalization (exponent 0.8), reduced LR (2e-6), grad_norm dropped from ~250 to ~2
-  - Added CONCISENESS as 7th evaluation dimension (weight 10%) to reduce reward for verbose padding
+  - Added CONCISENESS as 7th evaluation dimension (weight 5%)
   - **Added Lonergan synopsis to Gemini evaluator system prompt** (`llm_evaluator.py`): ~2645 tokens of foundational framework now included in cached system instruction
-  - Key sections added: 4-level cognitive pattern, Virtually Unconditioned structure, domain-specific fulfillment criteria, counterposition detection, artifact/artificer distinction
-  - Rationale: Gemini likely has shallow Lonergan exposure; synopsis provides operational framework for evaluating whether student completions instantiate the cognitive pattern correctly
-  - Training running: 1000 steps, batch=4, gens=4, lr=2e-6, ~90s/step
+  - **Added REVERSION as 8th evaluation dimension** (14% weight): THE critical operation distinguishing Level 3 (judgment) from Level 2 (understanding) - fulfillment found by reverting to data, not manipulating formulations
+  - Created `docs/_compressed/` with 5 compressed docs (~4400 tokens): temporal_structure, counterpositions, self_appropriation, interpretation, domain_schema
+  - Signal loss audit: identified REVERSION as critical missing piece; deferred COMMITMENT to decision model, DEVELOPMENTAL_CHARACTER to creative model
+  - Training running: 1000 steps, batch=4, gens=4, lr=2e-6, ~90s/step, checkpoints every 100 steps
 
 ## Operational Principles
 

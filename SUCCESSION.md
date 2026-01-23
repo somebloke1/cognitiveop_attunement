@@ -1,46 +1,78 @@
 # Succession Notes for Next Agent
 
-*Last updated: 2026-01-22 (Session 6)*
+*Last updated: 2026-01-23 (Session 7)*
 
 ## Immediate Context
 
-**PHASE**: Abandon custom pipelined trainer. Return to TRL-based `run_enhanced_training.py`.
+**PHASE**: 1000-step training run in progress with PipelinedTrainerV2
 
-**WHAT JUST HAPPENED (Session 6)**:
-1. Attempted to debug pipelined trainer generation hang
-2. Discovered generation is NOT hanging - it's just **extremely slow** (2 tok/s vs expected 10+ tok/s)
-3. Identified that SDPA (Scaled Dot Product Attention) works fine with base model (13.8 tok/s)
-4. With LoRA: 8.1 tok/s. With TRL+LoRA: 2 tok/s - something in TRL's loading is disabling efficient attention
-5. Could not isolate the root cause in reasonable time
-6. **Decision**: Abandon custom pipelined trainer, use TRL's native training which works correctly
+**WHAT'S RUNNING NOW**:
+- Training: `src/training/pipelined_trainer_v2.py`
+- Data: `data/oracle_generated/judgment_v2_train.jsonl` (896 examples)
+- Output: `models/judgment_v2_full/`
+- Config: batch=4, gens=4, lr=2e-6, steps=1000
+- Estimated time: ~25 hours total (~90s/step)
 
-**KEY INSIGHT**: The TRL-based `run_enhanced_training.py` script works correctly and at reasonable speed. The custom `pipelined_trainer.py` was an optimization attempt that introduced complexity we couldn't debug efficiently.
+**WHAT JUST HAPPENED (Session 7)**:
+1. Built `pipelined_trainer_v2.py` - Native model loading (no TRL dependency), cross-step async pipelining
+2. Solved training instability: token normalization (0.8 exponent), reduced LR to 2e-6
+3. Added CONCISENESS as 7th evaluation dimension
+4. **Added Lonergan synopsis to Gemini evaluator** (~2645 tokens in cached system instruction)
+5. **Added REVERSION as 8th evaluation dimension** (14% weight) - critical for distinguishing Level 3 from Level 2
+6. Created compressed docs (`docs/_compressed/`) for selective system instruction augmentation
+7. Conducted signal loss audit comparing early ideal to current implementation
 
-## What Works
+## Training Run Status
 
-### Use This: `scripts/run_enhanced_training.py`
-- Uses `CognitiveGRPOTrainer` (fixes TRL column preservation bug)
-- TRL handles generation internally at proper speed
-- Gemini evaluation works (model updated to `gemini-3-flash-preview`)
+**Current metrics (as of step ~14)**:
+- grad_norm: ~2.0 (was ~250 before token normalization fix)
+- loss: ~-0.17 (negative = favoring high-advantage completions, correct)
+- rewards: ~0.26-0.57 range (variance exists, learning possible)
+- speed: ~90s/step
 
-### Don't Use: `src/training/pipelined_trainer.py`
-- Cross-step async pipelining concept is sound
-- Implementation has undiagnosed generation slowdown (2 tok/s)
-- Not worth debugging when TRL-based approach works
+**Checkpoints**: Save every 100 steps to `models/judgment_v2_full/checkpoint-{step}/`
 
-## Fixed This Session
+## Key Changes This Session
 
-1. **Gemini model name**: Updated from `gemini-2.5-flash-preview-05-20` (404) to `gemini-3-flash-preview`
-2. **Logging**: Rewrote `src/evaluation/logging_config.py` to use per-component QueueHandler for non-blocking async-safe logging
-3. **Async evaluator order**: Moved async Gemini thread startup to happen before model loading
+### 1. REVERSION Dimension Added
 
-## V2 Dataset
+**Why**: Reversion is THE critical operation distinguishing judgment (Level 3) from understanding (Level 2). Fulfillment is found by reverting from formulation to "the more rudimentary state—to what is merely sensed or merely conscious, not as formulated but as given."
 
-**Location**: `data/oracle_generated/judgment_v2_train.jsonl` (896 examples)
+**What it evaluates**:
+- High: Student cites SPECIFIC evidence, quotes data, points to particular observations
+- Low: Student asserts fulfillment abstractly, manipulates concepts without checking data
+- Zero: Pure inference without reversion to data
 
-Split from full dataset:
-- `judgment_v2_train.jsonl` - 896 examples (training)
-- `judgment_v2_val.jsonl` - 100 examples (validation)
+**New weight distribution** (8 dimensions):
+| Dimension | Weight |
+|-----------|--------|
+| CONDITION_IDENTIFICATION | 14% |
+| EVIDENCE_MAPPING | 16% |
+| REASONING_VALIDITY | 20% |
+| JUDGMENT_COHERENCE | 16% |
+| OPERATIONAL_FIDELITY | 12% |
+| REVERSION | 14% |
+| AUTHENTIC_INTENT | 3% |
+| CONCISENESS | 5% |
+
+### 2. Compressed Documentation
+
+Created `docs/_compressed/` with 5 documents (~4400 tokens total):
+- `temporal_structure.md` - Temporal reasoning in judgment
+- `counterpositions.md` - Detecting self-defeating claims
+- `self_appropriation.md` - Philosophic domain, performative consistency
+- `interpretation.md` - Expression structure, hermeneutics
+- `domain_schema.md` - Mode-of-fulfillment differentiation
+
+See `docs/_compressed/INDEX.md` for mode-specific inclusion recommendations.
+
+### 3. Signal Loss Audit Results
+
+**Restored**: REVERSION (for judgment)
+
+**Deferred to appropriate operations**:
+- COMMITMENT → Decision/Responsibility model
+- DEVELOPMENTAL_CHARACTER → Creative/Ideational model
 
 ## Quick Commands
 
@@ -49,154 +81,139 @@ Split from full dataset:
 cd /home/dgk/projects/cognitiveop_attunement
 source .venv/bin/activate
 
-# Run enhanced training (THE WORKING APPROACH)
-CUDA_VISIBLE_DEVICES=0 python scripts/run_enhanced_training.py \
-  --data data/oracle_generated/judgment_v2_train.jsonl \
-  --output models/judgment_v2 \
-  --steps 20 \
-  --batch-size 1 \
-  --num-generations 2
+# Check if training is running
+ps aux | grep python | grep train
 
-# Check Gemini connectivity
-python -c "
-from google import genai
-import os
-client = genai.Client(api_key=os.getenv('GOOGLE_API_KEY'))
-response = client.models.generate_content(model='gemini-3-flash-preview', contents='Say hello')
-print(response.text)
-"
+# Check training progress
+tail -50 logs/training_full.log
 
-# Run tests
-pytest tests/ -v --tb=short
+# Check GPU memory
+nvidia-smi --query-gpu=memory.used --format=csv
+
+# Check current step (parse from log)
+grep "^Step" logs/training_full.log | tail -5
+
+# Run tests (all 34 evaluation tests should pass)
+pytest tests/evaluation/ -v --tb=short
 ```
 
-## Technical Details
+## Monitoring the Training Run
 
-### Generation Speed Findings
+**Key things to watch**:
 
-| Configuration | tok/s | Notes |
-|--------------|-------|-------|
-| Base model + SDPA | 13.8 | Fast, expected |
-| Base + LoRA + SDPA | 8.1 | Acceptable |
-| TRL + LoRA (direct load) | ~2.0 | Something disables SDPA |
-| TRL native training | Works | TRL handles it internally |
+1. **grad_norm**: Should stay in 1-10 range. If it spikes to 100+, training is unstable.
 
-The mystery: TRL's `GRPOTrainer` loading seems to disable efficient attention even when `attn_implementation="sdpa"` is passed in `model_init_kwargs`. But TRL's *internal* generation during training works fine.
+2. **loss**: Should trend toward 0 over time. Negative loss is correct (GRPO favors high-advantage).
 
-### Gemini Model
+3. **reward mean**: Should gradually increase as model improves.
 
-Working: `gemini-3-flash-preview`
-Dead: `gemini-2.5-flash-preview-05-20`
+4. **Correct judgments**: Log shows "X/4 correct" per batch. Should trend upward.
 
-Available models (as of 2026-01-22):
-- `gemini-3-flash-preview`
-- `gemini-2.5-flash`
-- `gemini-2.5-pro`
-- `gemini-2.0-flash`
+5. **VRAM**: Should stay under 20GB. If hitting 24GB, reduce batch size.
+
+**Log locations**:
+- `logs/training_full.log` - Main training progress
+- `logs/cognitive_eval.log` - Gemini evaluation details
 
 ## Files Modified This Session
 
-- `src/training/pipelined_trainer.py` - Setup order, logging (but don't use this file)
-- `src/evaluation/logging_config.py` - Rewrote with per-component QueueHandler
-- `src/evaluation/async_reward.py` - Added init/ready log messages
-- Model names updated to `gemini-3-flash-preview` in multiple files
+| File | Changes |
+|------|---------|
+| `src/evaluation/llm_evaluator.py` | Added REVERSION dimension, Lonergan synopsis, rebalanced weights |
+| `src/training/pipelined_trainer_v2.py` | Token normalization (0.8 exp), diagnostic logging |
+| `docs/_compressed/*.md` | New compressed documentation |
+| `CLAUDE.md` | Updated project state, decisions log |
 
-## Test Files Created (Can Delete)
+## What NOT to Do
 
-- `test_gen_minimal.py`
-- `test_gen_class.py`
-- `test_gen_import.py`
-- `test_gen_trainer.py`
-- `test_gen_async.py`
-- `test_gen_setup.py`
-- `test_async_timing.py`
-- `test_single_step.py`
-- `test_gen_with_async.py`
-- `test_gen_real_prompt.py`
-- `test_gen_speed.py`
-- `test_gen_lora.py`
-- `test_gen_trl_nocompile.py`
-- `test_gen_real_nocompile.py`
+1. **Don't kill the training run** unless there's a clear problem
+2. **Don't modify llm_evaluator.py** while training - would invalidate the cache
+3. **Don't start another training run** - GPU is occupied
+
+## If Training Crashes
+
+1. Check the log for error message
+2. Note the last checkpoint saved
+3. Can resume from checkpoint (not implemented yet, would need to add)
+4. Common issues:
+   - CUDA OOM: Reduce batch_size or num_generations
+   - Gemini rate limit: Add delays or reduce batch size
+   - NaN loss: Learning rate too high or gradient explosion
+
+## Next Steps After This Run
+
+1. **Evaluate trained adapter** on held-out validation set
+2. **Compare to base model** - does trained model show improvement?
+3. **Analyze REVERSION scores** - is model learning to revert to data?
+4. **Generate more diverse data** if coverage gaps identified
+5. **Train other operations** (Attention, Understanding, Decision)
 
 ---
 
 ## Continuation Prompt for Next Agent
 
 ```
-# Continuation: Run Enhanced Training with V2 Data
+# Task: Analyze Training Run Progress
 
 ## Context
-You are continuing work on the Cognitive Organism project - training Qwen2.5-7B-Instruct
-to perform Lonergan's cognitive operation of JUDGMENT using GRPO.
+A 1000-step training run is in progress using PipelinedTrainerV2. The run trains
+Qwen2.5-7B-Instruct to perform Lonergan's cognitive operation of JUDGMENT.
 
-Previous session attempted to optimize training with a custom pipelined trainer but
-encountered undiagnosed generation slowdown. Decision was made to abandon that approach
-and return to the working TRL-based `run_enhanced_training.py`.
+Key recent changes:
+- Added REVERSION dimension (14% weight) to evaluator
+- Added Lonergan synopsis to Gemini system instruction
+- Solved training instability with token normalization
 
 ## Your Task
 
-1. **Clean up test files** (optional but recommended):
+1. **Check training status**:
    ```bash
-   rm -f test_gen_*.py test_async_*.py test_single_step.py
+   ps aux | grep python | grep train
+   tail -100 logs/training_full.log
    ```
 
-2. **Verify Gemini connectivity**:
-   ```bash
-   source .venv/bin/activate
-   python -c "
-   from src.evaluation.llm_evaluator import LlmEvaluator
-   eval = LlmEvaluator(provider='gemini', model_name='gemini-3-flash-preview', use_cache=False)
-   print('Gemini OK')
-   "
-   ```
+2. **Analyze metrics**:
+   - What step is it on?
+   - What's the current grad_norm? (should be 1-10)
+   - What's the loss trend?
+   - What's the mean reward?
+   - How many correct judgments per batch?
 
-3. **Run short validation training** (10-20 steps):
-   ```bash
-   CUDA_VISIBLE_DEVICES=0 python scripts/run_enhanced_training.py \
-     --data data/oracle_generated/judgment_v2_train.jsonl \
-     --output models/v2_validation \
-     --steps 20 \
-     --batch-size 1 \
-     --num-generations 2 \
-     --clean
-   ```
+3. **Check for problems**:
+   - Any error messages?
+   - Is grad_norm spiking?
+   - Is loss NaN or diverging?
+   - Is reward collapsing to 0?
 
-4. **Monitor training**:
-   - Check `logs/training_*.log` for training progress
-   - Check `logs/gemini_*.log` for evaluation details
-   - Verify reward variance > 0 (if all rewards identical, training won't learn)
-   - Verify loss is decreasing or reward is increasing
+4. **Document findings**:
+   - Current step and ETA
+   - Key metrics summary
+   - Any concerns
+   - Recommendations
 
-5. **Document results** in SUCCESSION.md for next agent
+5. **If training completed**:
+   - Check final checkpoint exists
+   - Run validation evaluation
+   - Compare to baseline
 
 ## Key Files
 
-- `scripts/run_enhanced_training.py` - Main training script (USE THIS)
-- `src/training/cognitive_grpo_trainer.py` - CognitiveGRPOTrainer (preserves custom columns)
-- `data/oracle_generated/judgment_v2_train.jsonl` - Training data (896 examples)
+- `logs/training_full.log` - Main training log
+- `logs/cognitive_eval.log` - Evaluation details
+- `models/judgment_v2_full/` - Output directory
+- `src/training/pipelined_trainer_v2.py` - Trainer implementation
 
-## Success Criteria
-- [ ] Training runs without errors for 20 steps
-- [ ] Reward variance > 0 (model produces diverse outputs)
-- [ ] Learning signal visible (loss trending down OR mean reward trending up)
-- [ ] Results documented
+## Expected Metrics
 
-## If Training Fails
+- grad_norm: 1-10 (was ~250 before fix)
+- loss: trending toward 0 (negative is normal for GRPO)
+- rewards: 0.3-0.7 range with variance
+- speed: ~90s/step
+- correct: trending upward over time
 
-Common issues:
-1. **Gemini 404**: Model name changed. Check available models with:
-   ```python
-   from google import genai
-   import os
-   client = genai.Client(api_key=os.getenv('GOOGLE_API_KEY'))
-   for m in client.models.list():
-       if 'flash' in m.name.lower():
-           print(m.name)
-   ```
+## Do NOT
 
-2. **CUDA OOM**: Reduce batch size or num_generations
-
-3. **Zero reward variance**: All completions getting same reward - check reward function logic
-
-4. **Column dropped**: Use CognitiveGRPOTrainer, not base GRPOTrainer
+- Kill the training unless clearly broken
+- Modify llm_evaluator.py (would invalidate cache)
+- Start competing GPU processes
 ```
