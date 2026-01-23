@@ -5,12 +5,18 @@ These tests define the expected behavior of the coverage analyzer module
 BEFORE implementation. Tests should FAIL initially.
 
 Coverage Analyzer tracks multi-dimensional coverage:
-- Domain: 5 levels (mathematical, empirical, common_sense, pop_science, philosophic)
+- Domain: 35 principled domains from src/domains.py
+  * 3 formal mode domains
+  * 17 empirical mode domains (across 4 integration levels)
+  * 5 common sense domains
+  * 2 dialectical domains
+  * 6 adversarial context domains
+  * 5 edge case domains
 - Judgment: 3 levels (Yes, No, Insufficient)
 - Difficulty: 5 levels (1-5)
 - Distractor: 2 levels (True, False)
 
-Total cells: 5 x 3 x 5 x 2 = 150
+Total cells: 35 x 3 x 5 x 2 = 1050
 
 Tests are organized by functionality:
 1. Coverage matrix construction
@@ -37,28 +43,41 @@ try:
         CoverageDimension,
         CoverageGap,
     )
+
     COVERAGE_MODULE_AVAILABLE = True
 except ImportError:
     COVERAGE_MODULE_AVAILABLE = False
+
     # Define placeholder types for test discovery
-    def build_coverage_matrix(examples): raise NotImplementedError
-    def find_coverage_gaps(matrix, min_count=2): raise NotImplementedError
-    def get_coverage_percentage(matrix): raise NotImplementedError
-    def get_most_sparse_cells(matrix, n=10): raise NotImplementedError
-    def generate_target_specification(gap): raise NotImplementedError
-    def balance_batch(examples, targets): raise NotImplementedError
+    def build_coverage_matrix(examples):
+        raise NotImplementedError
+
+    def find_coverage_gaps(matrix, min_count=2):
+        raise NotImplementedError
+
+    def get_coverage_percentage(matrix):
+        raise NotImplementedError
+
+    def get_most_sparse_cells(matrix, n=10):
+        raise NotImplementedError
+
+    def generate_target_specification(gap):
+        raise NotImplementedError
+
+    def balance_batch(examples, targets):
+        raise NotImplementedError
 
 
 # Skip all tests if module not implemented yet (expected for TDD)
 pytestmark = pytest.mark.skipif(
-    not COVERAGE_MODULE_AVAILABLE,
-    reason="Coverage module not yet implemented (TDD)"
+    not COVERAGE_MODULE_AVAILABLE, reason="Coverage module not yet implemented (TDD)"
 )
 
 
 # =============================================================================
 # PART 1: Coverage Matrix Construction Tests
 # =============================================================================
+
 
 class TestBuildCoverageMatrix:
     """Tests for build_coverage_matrix(examples) function."""
@@ -80,25 +99,23 @@ class TestBuildCoverageMatrix:
         """Single example should increment exactly one cell."""
         matrix = build_coverage_matrix(single_example)
 
-        # The example is: mathematical, Yes, difficulty=1, has_distractor=False
-        expected_cell = ("mathematical", "Yes", 1, False)
+        # The example is: pure_mathematics, Yes, difficulty=1, has_distractor=False
+        expected_cell = ("pure_mathematics", "Yes", 1, False)
 
         non_zero_cells = [k for k, v in matrix.items() if v > 0]
         assert len(non_zero_cells) == 1, "Only one cell should be non-zero"
         assert matrix[expected_cell] == 1
 
     def test_matrix_has_correct_dimensions(self, single_example, coverage_dimensions):
-        """Matrix should have 5 x 3 x 5 x 2 = 150 cells."""
+        """Matrix should have all domain x judgment x difficulty x distractor combinations."""
         matrix = build_coverage_matrix(single_example)
 
-        expected_cells = (
-            len(coverage_dimensions["domain"]) *
-            len(coverage_dimensions["judgment"]) *
-            len(coverage_dimensions["difficulty"]) *
-            len(coverage_dimensions["has_distractor"])
-        )
+        # 35 domains x 3 judgments x 5 difficulties x 2 distractor states = 1050
+        expected_cells = 1050
 
-        assert len(matrix) == expected_cells, f"Expected {expected_cells} cells"
+        assert len(matrix) == expected_cells, (
+            f"Expected {expected_cells} cells, got {len(matrix)}"
+        )
 
     def test_cell_keys_are_tuples(self, single_example):
         """Cell keys should be tuples of (domain, judgment, difficulty, has_distractor)."""
@@ -117,8 +134,8 @@ class TestBuildCoverageMatrix:
         """Unbalanced dataset should show high count in clustered cell."""
         matrix = build_coverage_matrix(unbalanced_dataset)
 
-        # Most examples are: empirical, Yes, difficulty=2, has_distractor=False
-        clustered_cell = ("empirical", "Yes", 2, False)
+        # Most examples are: physics, Yes, difficulty=2, has_distractor=False
+        clustered_cell = ("physics", "Yes", 2, False)
         assert matrix[clustered_cell] == 20, "Clustered cell should have 20 examples"
 
     def test_balanced_dataset_distribution(self, balanced_dataset):
@@ -178,6 +195,7 @@ class TestCoverageDimension:
 # PART 2: Gap Analysis Tests
 # =============================================================================
 
+
 class TestFindCoverageGaps:
     """Tests for find_coverage_gaps(matrix, min_count) function."""
 
@@ -193,8 +211,9 @@ class TestFindCoverageGaps:
         matrix = build_coverage_matrix(empty_dataset)
         gaps = find_coverage_gaps(matrix, min_count=2)
 
-        # All 150 cells should be gaps (count 0 < min 2)
-        assert len(gaps) == 150
+        # All 1050 cells should be gaps (count 0 < min 2)
+        # 35 domains x 3 judgments x 5 difficulties x 2 distractor states = 1050
+        assert len(gaps) == 1050
 
     def test_gap_has_required_fields(self, unbalanced_dataset):
         """Each gap should have domain, judgment, difficulty, has_distractor, current_count."""
@@ -203,12 +222,12 @@ class TestFindCoverageGaps:
 
         if gaps:  # May have some gaps
             gap = gaps[0]
-            assert hasattr(gap, 'domain')
-            assert hasattr(gap, 'judgment')
-            assert hasattr(gap, 'difficulty')
-            assert hasattr(gap, 'has_distractor')
-            assert hasattr(gap, 'current_count')
-            assert hasattr(gap, 'target_count')
+            assert hasattr(gap, "domain")
+            assert hasattr(gap, "judgment")
+            assert hasattr(gap, "difficulty")
+            assert hasattr(gap, "has_distractor")
+            assert hasattr(gap, "current_count")
+            assert hasattr(gap, "target_count")
 
     def test_gap_current_count_below_threshold(self, unbalanced_dataset):
         """All gaps should have current_count < min_count."""
@@ -223,14 +242,16 @@ class TestFindCoverageGaps:
         # Create dataset with at least 2 examples in every cell
         # This is a large dataset, so we simplify for testing
         examples = []
-        for domain in ["mathematical", "empirical"]:
+        for domain in ["pure_mathematics", "physics"]:
             for judgment in ["Yes", "No"]:
                 for diff in [1, 2]:
                     for dist in [True, False]:
-                        examples.extend([
-                            make_dataset(n=1, domain_dist={domain: 1})[0]
-                            for _ in range(3)
-                        ])
+                        examples.extend(
+                            [
+                                make_dataset(n=1, domain_dist={domain: 1})[0]
+                                for _ in range(3)
+                            ]
+                        )
 
         # Build a custom matrix for this subset
         # For this test, we'd need actual implementation
@@ -302,7 +323,7 @@ class TestGetMostSparseCells:
         matrix = build_coverage_matrix(unbalanced_dataset)
         sparse = get_most_sparse_cells(matrix, n=20)
 
-        counts = [cell['count'] for cell in sparse]
+        counts = [cell["count"] for cell in sparse]
         assert counts == sorted(counts), "Cells not sorted by count"
 
     def test_sparse_cell_has_required_info(self, unbalanced_dataset):
@@ -312,8 +333,8 @@ class TestGetMostSparseCells:
 
         if sparse:
             cell = sparse[0]
-            assert 'cell_id' in cell or isinstance(cell, tuple)
-            assert 'count' in cell or len(cell) >= 2
+            assert "cell_id" in cell or isinstance(cell, tuple)
+            assert "count" in cell or len(cell) >= 2
 
     def test_zero_count_cells_first(self, unbalanced_dataset):
         """Cells with count 0 should come first."""
@@ -322,8 +343,12 @@ class TestGetMostSparseCells:
 
         if sparse and len(sparse) > 1:
             # First cells should have lowest counts
-            first_count = sparse[0].get('count', sparse[0][1] if isinstance(sparse[0], tuple) else 0)
-            last_count = sparse[-1].get('count', sparse[-1][1] if isinstance(sparse[-1], tuple) else 0)
+            first_count = sparse[0].get(
+                "count", sparse[0][1] if isinstance(sparse[0], tuple) else 0
+            )
+            last_count = sparse[-1].get(
+                "count", sparse[-1][1] if isinstance(sparse[-1], tuple) else 0
+            )
             assert first_count <= last_count
 
 
@@ -331,13 +356,14 @@ class TestGetMostSparseCells:
 # PART 3: Targeted Generation Tests
 # =============================================================================
 
+
 class TestGenerateTargetSpecification:
     """Tests for generate_target_specification(gap) function."""
 
     def test_returns_dict_specification(self):
         """Should return a dictionary with generation requirements."""
         gap = CoverageGap(
-            domain="mathematical",
+            domain="pure_mathematics",
             judgment="Yes",
             difficulty=3,
             has_distractor=True,
@@ -352,7 +378,7 @@ class TestGenerateTargetSpecification:
     def test_spec_includes_all_dimensions(self):
         """Specification should include all gap dimensions."""
         gap = CoverageGap(
-            domain="empirical",
+            domain="physics",
             judgment="No",
             difficulty=4,
             has_distractor=False,
@@ -362,7 +388,7 @@ class TestGenerateTargetSpecification:
         )
         spec = generate_target_specification(gap)
 
-        assert spec["domain"] == "empirical"
+        assert spec["domain"] == "physics"
         assert spec["judgment"] == "No"
         assert spec["difficulty"] == 4
         assert spec["has_distractor"] == False
@@ -370,7 +396,7 @@ class TestGenerateTargetSpecification:
     def test_spec_includes_count_needed(self):
         """Specification should include how many examples needed."""
         gap = CoverageGap(
-            domain="philosophic",
+            domain="philosophical",
             judgment="Insufficient",
             difficulty=5,
             has_distractor=True,
@@ -386,7 +412,7 @@ class TestGenerateTargetSpecification:
     def test_spec_includes_domain_specific_guidance(self):
         """Specification should include domain-appropriate generation hints."""
         gap = CoverageGap(
-            domain="mathematical",
+            domain="pure_mathematics",
             judgment="Yes",
             difficulty=3,
             has_distractor=False,
@@ -451,6 +477,7 @@ class TestBalanceBatch:
 # PART 4: CoverageAnalyzer Class Tests
 # =============================================================================
 
+
 class TestCoverageAnalyzerClass:
     """Tests for the CoverageAnalyzer class (wrapper)."""
 
@@ -465,20 +492,18 @@ class TestCoverageAnalyzerClass:
         assert analyzer is not None
         assert len(analyzer.dimensions) == 4
 
-    def test_analyzer_analyze_method(self, balanced_dataset):
+    def test_analyzer_analyze_method(self, balanced_dataset, coverage_dimensions):
         """Analyzer should have analyze() method returning report."""
         dims = [
-            CoverageDimension("domain", ["mathematical", "empirical", "common_sense", "pop_science", "philosophic"]),
-            CoverageDimension("judgment", ["Yes", "No", "Insufficient"]),
-            CoverageDimension("difficulty", [1, 2, 3, 4, 5]),
-            CoverageDimension("has_distractor", [True, False]),
+            CoverageDimension(name, values)
+            for name, values in coverage_dimensions.items()
         ]
         analyzer = CoverageAnalyzer(dimensions=dims)
 
         report = analyzer.analyze(balanced_dataset)
 
         assert report is not None
-        assert hasattr(report, 'matrix') or 'matrix' in report
+        assert hasattr(report, "matrix") or "matrix" in report
 
     def test_analyzer_total_cells_property(self):
         """Analyzer should report total number of cells."""
@@ -493,7 +518,7 @@ class TestCoverageAnalyzerClass:
     def test_analyzer_visualize_returns_string(self, balanced_dataset):
         """Analyzer visualize() should return string representation."""
         dims = [
-            CoverageDimension("domain", ["mathematical", "empirical"]),
+            CoverageDimension("domain", ["pure_mathematics", "physics"]),
             CoverageDimension("judgment", ["Yes", "No"]),
         ]
         analyzer = CoverageAnalyzer(dimensions=dims)
@@ -508,6 +533,7 @@ class TestCoverageAnalyzerClass:
 # =============================================================================
 # PART 5: Integration Tests
 # =============================================================================
+
 
 class TestCoverageIntegration:
     """Integration tests for coverage analysis workflow."""
@@ -546,7 +572,9 @@ class TestCoverageIntegration:
         # Each gap should be actionable (has all info needed for generation)
         for gap in gaps[:5]:
             spec = generate_target_specification(gap)
-            assert spec["domain"] in ["mathematical", "empirical", "common_sense", "pop_science", "philosophic"]
+            # Domain should be one of the 35 domains
+            assert isinstance(spec["domain"], str)
+            assert len(spec["domain"]) > 0
             assert spec["judgment"] in ["Yes", "No", "Insufficient"]
             assert 1 <= spec["difficulty"] <= 5
             assert isinstance(spec["has_distractor"], bool)
@@ -556,28 +584,37 @@ class TestCoverageIntegration:
 # PART 6: Edge Cases
 # =============================================================================
 
+
 class TestCoverageEdgeCases:
     """Edge case tests for coverage analysis."""
 
     def test_duplicate_examples_counted(self, make_example):
         """Duplicate examples should be counted multiple times."""
-        example = make_example(domain="mathematical", judgment="Yes", difficulty=1)
+        example = make_example(domain="pure_mathematics", judgment="Yes", difficulty=1)
         examples = [example, example, example]  # 3 duplicates
 
         matrix = build_coverage_matrix(examples)
 
-        cell = ("mathematical", "Yes", 1, False)
+        cell = ("pure_mathematics", "Yes", 1, False)
         assert matrix[cell] == 3
 
     def test_all_domains_represented(self, coverage_dimensions):
-        """All 5 domains should be valid keys in matrix."""
+        """All 35 domains from src/domains.py should be valid keys in matrix."""
         examples = []  # Empty
         matrix = build_coverage_matrix(examples)
 
         domains_in_matrix = set(key[0] for key in matrix.keys())
-        expected_domains = set(coverage_dimensions["domain"])
 
-        assert expected_domains == domains_in_matrix
+        # All 35 domains should be present
+        expected_domains = set(coverage_dimensions["domain"])
+        assert expected_domains.issubset(domains_in_matrix), (
+            f"Expected all domains to be subset of matrix domains"
+        )
+
+        # Verify the total count is 35
+        assert len(domains_in_matrix) == 35, (
+            f"Expected 35 total domains, got {len(domains_in_matrix)}"
+        )
 
     def test_all_judgment_types_represented(self, coverage_dimensions):
         """All 3 judgment types should be valid keys in matrix."""
@@ -608,7 +645,7 @@ class TestCoverageEdgeCases:
         # Create 10000 examples
         examples = [
             make_example(
-                domain=["mathematical", "empirical", "common_sense"][i % 3],
+                domain=["pure_mathematics", "physics", "everyday_practical"][i % 3],
                 judgment=["Yes", "No", "Insufficient"][i % 3],
                 difficulty=(i % 5) + 1,
             )

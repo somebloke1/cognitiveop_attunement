@@ -28,28 +28,80 @@ from typing import List, Dict, Any, Optional
 VERIFICATION_TEMPLATES = {
     "mathematical": {
         "verification_type": "proof",
-        "required_elements": ["axioms_referenced", "logical_steps", "conclusion_marker"],
-        "output_markers": ["qed", "therefore", "thus", "it follows that", "by definition", "axiom", "proof", "theorem"],
+        "required_elements": [
+            "axioms_referenced",
+            "logical_steps",
+            "conclusion_marker",
+        ],
+        "output_markers": [
+            "qed",
+            "therefore",
+            "thus",
+            "it follows that",
+            "by definition",
+            "axiom",
+            "proof",
+            "theorem",
+        ],
     },
     "empirical": {
         "verification_type": "experimental",
-        "required_elements": ["data_points_cited", "methodology_stated", "replication_status"],
-        "output_markers": ["data shows", "measured", "observed", "replicated", "experiment", "evidence shows", "data", "measure", "observe"],
+        "required_elements": [
+            "data_points_cited",
+            "methodology_stated",
+            "replication_status",
+        ],
+        "output_markers": [
+            "data shows",
+            "measured",
+            "observed",
+            "replicated",
+            "experiment",
+            "evidence shows",
+            "data",
+            "measure",
+            "observe",
+        ],
     },
     "common_sense": {
         "verification_type": "pragmatic",
         "required_elements": ["situation_described", "practical_outcome"],
-        "output_markers": ["works", "practical", "experience shows", "in this situation", "typically", "experience"],
+        "output_markers": [
+            "works",
+            "practical",
+            "experience shows",
+            "in this situation",
+            "typically",
+            "experience",
+        ],
     },
     "pop_science": {
         "verification_type": "counterposition_detection",
-        "required_elements": ["claimed_proof_identified", "conditions_unfulfilled_listed"],
-        "output_markers": ["claim unfounded", "correlation not causation", "conditions unfulfilled", "unfulfilled", "alleged", "correlation"],
+        "required_elements": [
+            "claimed_proof_identified",
+            "conditions_unfulfilled_listed",
+        ],
+        "output_markers": [
+            "claim unfounded",
+            "correlation not causation",
+            "conditions unfulfilled",
+            "unfulfilled",
+            "alleged",
+            "correlation",
+        ],
     },
     "philosophic": {
         "verification_type": "performative_consistency",
         "required_elements": ["position_stated", "self_consistency_check"],
-        "output_markers": ["self-defeating", "performative contradiction", "presupposes", "coherent", "counterposition", "performative", "self-consistency"],
+        "output_markers": [
+            "self-defeating",
+            "performative contradiction",
+            "presupposes",
+            "coherent",
+            "counterposition",
+            "performative",
+            "self-consistency",
+        ],
     },
 }
 
@@ -57,6 +109,7 @@ VERIFICATION_TEMPLATES = {
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
+
 
 def extract_judgment(completion: str) -> Optional[str]:
     """
@@ -73,22 +126,49 @@ def extract_judgment(completion: str) -> Optional[str]:
 
     output_lower = completion.lower()
 
-    # Pattern: "judgment" followed by optional "is" and separator then value
+    # Pattern 1: "judgment" followed by optional "is" and separator then value
     # Handles: "Judgment: Yes", "Judgment - No", "judgment:\nInsufficient",
     # "The judgment is: Yes", "Final judgment: Yes.", "judgment:yes", etc.
-    # The pattern allows for:
-    # - Optional whitespace after "judgment"
-    # - Optional "is" word
-    # - Separators like ":", "-", or just whitespace
-    # - Optional whitespace before the value
     pattern = r"judgment(?:\s+is)?[\s:\-]+\s*(yes|no|insufficient)"
     matches = list(re.finditer(pattern, output_lower))
-
     if matches:
-        # Use the last match (in case of multiple judgment markers)
         value = matches[-1].group(1)
-        # Normalize to title case
         return value.capitalize()
+
+    # Pattern 2: Conclusion/verdict patterns
+    pattern = r"(?:conclude|conclusion|verdict|answer)[\s:\-]+\s*(yes|no|insufficient)"
+    matches = list(re.finditer(pattern, output_lower))
+    if matches:
+        value = matches[-1].group(1)
+        return value.capitalize()
+
+    # Pattern 3: Standalone at start of line
+    pattern = r"(?:^|\n)\s*(yes|no|insufficient)\s*(?:\n|$|\.)"
+    matches = list(re.finditer(pattern, output_lower))
+    if matches:
+        value = matches[0].group(1)
+        return value.capitalize()
+
+    # Pattern 4: Semantic equivalents - "withhold judgment", "affirm", "deny", etc.
+    semantic_map = {
+        "withhold": "Insufficient",
+        "cannot affirm": "Insufficient",
+        "cannot determine": "Insufficient",
+        "cannot judge": "Insufficient",
+        "cannot be affirmed": "Insufficient",
+        "cannot be determined": "Insufficient",
+        "evidence is insufficient": "Insufficient",
+        "affirm the proposition": "Yes",
+        "affirm": "Yes",
+        "deny the proposition": "No",
+        "deny": "No",
+    }
+    # Check for semantic patterns (usually at end of completion)
+    # Look in last 500 chars for efficiency
+    end_text = output_lower[-500:] if len(output_lower) > 500 else output_lower
+    for phrase, judgment in semantic_map.items():
+        if phrase in end_text:
+            return judgment
 
     return None
 
@@ -116,6 +196,7 @@ def extract_quotes(text: str) -> List[str]:
 # COMPONENT SCORING FUNCTIONS
 # =============================================================================
 
+
 def score_correctness(completion: str, expected_judgment: str) -> float:
     """
     Score the correctness of the judgment (PRIMARY signal).
@@ -140,7 +221,9 @@ def score_correctness(completion: str, expected_judgment: str) -> float:
         return 0.0
 
     # Normalize expected for comparison (case-insensitive)
-    expected_normalized = expected_judgment.strip().capitalize() if expected_judgment else ""
+    expected_normalized = (
+        expected_judgment.strip().capitalize() if expected_judgment else ""
+    )
 
     # Compare judgments
     if model_judgment == expected_normalized:
@@ -150,9 +233,7 @@ def score_correctness(completion: str, expected_judgment: str) -> float:
 
 
 def score_evidence_grounding(
-    completion: str,
-    input_text: str,
-    citations: List[Dict[str, Any]]
+    completion: str, input_text: str, citations: List[Dict[str, Any]]
 ) -> float:
     """
     Score evidence grounding (Insight 3).
@@ -235,9 +316,7 @@ def score_evidence_grounding(
 
 
 def score_domain_verification(
-    completion: str,
-    domain: str,
-    verification_chain: Dict[str, Any]
+    completion: str, domain: str, verification_chain: Dict[str, Any]
 ) -> float:
     """
     Score domain-specific verification structure (Insight 7).
@@ -352,13 +431,14 @@ def score_structure(completion: str) -> float:
 # COMPOSITE REWARD FUNCTION
 # =============================================================================
 
+
 def compute_reward(
     completion: str,
     expected_judgment: str,
     domain: str,
     input_text: str,
     citations: List[Dict[str, Any]],
-    verification_chain: Dict[str, Any]
+    verification_chain: Dict[str, Any],
 ) -> float:
     """
     Compute the composite reward with multiplicative gating.
@@ -413,6 +493,7 @@ def compute_reward(
 # TRL-COMPATIBLE BATCH REWARD FUNCTION
 # =============================================================================
 
+
 def reward_fn(
     completions: List[str],
     prompts: List[str],
@@ -421,7 +502,7 @@ def reward_fn(
     input_text: List[str] = None,
     citations: List[str] = None,  # JSON-encoded
     verification_chain: List[str] = None,  # JSON-encoded
-    **kwargs
+    **kwargs,
 ) -> List[float]:
     """
     TRL-compatible reward function for batch processing.
@@ -494,7 +575,7 @@ def reward_fn(
             domain=dom,
             input_text=inp_text,
             citations=cit,
-            verification_chain=chain
+            verification_chain=chain,
         )
 
         rewards.append(float(reward))

@@ -14,7 +14,53 @@ from dataclasses import dataclass
 # Domain Constants
 # =============================================================================
 
-DOMAINS = ["mathematical", "empirical", "common_sense", "pop_science", "philosophic"]
+# All domains from src/domains.py - 35 principled domains
+DOMAINS = [
+    # Formal mode (3)
+    "pure_mathematics",
+    "formal_logic",
+    "set_theory",
+    # Empirical - Physical (4)
+    "physics",
+    "chemistry",
+    "astronomy",
+    "geology",
+    # Empirical - Biological (2)
+    "biochemistry",
+    "biology",
+    # Empirical - Sensitive (2)
+    "neuroscience",
+    "animal_cognition",
+    # Empirical - Intelligent (6)
+    "experimental_psychology",
+    "developmental_psychology",
+    "sociology",
+    "anthropology",
+    "economics",
+    "history",
+    # Common Sense (5)
+    "everyday_practical",
+    "social_common_sense",
+    "professional_judgment",
+    "generational_folk_wisdom",
+    "subcultural_knowledge",
+    # Dialectical (2)
+    "philosophical",
+    "pop_science",
+    # Adversarial contexts (6)
+    "deliberate_deception",
+    "manipulation",
+    "propaganda",
+    "sarcasm_irony",
+    "adversarial_debate",
+    "strategic_ambiguity",
+    # Edge cases (5)
+    "self_reference",
+    "category_errors",
+    "vagueness_sorites",
+    "counterfactuals",
+    "future_contingents",
+]
 JUDGMENT_TYPES = ["Yes", "No", "Insufficient"]
 DIFFICULTY_LEVELS = [1, 2, 3, 4, 5]
 
@@ -23,9 +69,11 @@ DIFFICULTY_LEVELS = [1, 2, 3, 4, 5]
 # Sample Data Classes (for testing before implementation)
 # =============================================================================
 
+
 @dataclass
 class SampleExample:
     """Minimal training example structure for coverage testing."""
+
     proposition: str
     evidence: str
     domain: str
@@ -43,6 +91,7 @@ class SampleExample:
 # Coverage Analyzer Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def empty_dataset() -> List[SampleExample]:
     """Empty dataset - all coverage cells should be 0."""
@@ -56,7 +105,7 @@ def single_example() -> List[SampleExample]:
         SampleExample(
             proposition="2 + 2 = 4",
             evidence="By the axioms of arithmetic...",
-            domain="mathematical",
+            domain="pure_mathematics",
             judgment="Yes",
             difficulty=1,
             has_distractor=False,
@@ -68,13 +117,13 @@ def single_example() -> List[SampleExample]:
 def unbalanced_dataset() -> List[SampleExample]:
     """Dataset heavily clustered in one domain/judgment/difficulty."""
     examples = []
-    # 20 examples all in empirical/Yes/difficulty 2
+    # 20 examples all in physics/Yes/difficulty 2
     for i in range(20):
         examples.append(
             SampleExample(
-                proposition=f"Empirical proposition {i}",
+                proposition=f"Physics proposition {i}",
                 evidence=f"The experiment showed result {i}.",
-                domain="empirical",
+                domain="physics",
                 judgment="Yes",
                 difficulty=2,
                 has_distractor=False,
@@ -85,7 +134,7 @@ def unbalanced_dataset() -> List[SampleExample]:
         SampleExample(
             proposition="Mathematical proposition",
             evidence="By definition...",
-            domain="mathematical",
+            domain="pure_mathematics",
             judgment="No",
             difficulty=3,
             has_distractor=False,
@@ -95,7 +144,7 @@ def unbalanced_dataset() -> List[SampleExample]:
         SampleExample(
             proposition="Common sense proposition",
             evidence="In this situation...",
-            domain="common_sense",
+            domain="everyday_practical",
             judgment="Insufficient",
             difficulty=1,
             has_distractor=True,
@@ -108,8 +157,8 @@ def unbalanced_dataset() -> List[SampleExample]:
 def balanced_dataset() -> List[SampleExample]:
     """Well-balanced dataset across dimensions."""
     examples = []
-    # Create examples across multiple dimensions
-    for domain in ["mathematical", "empirical", "common_sense"]:
+    # Create examples across multiple dimensions using new domain names
+    for domain in ["pure_mathematics", "physics", "everyday_practical"]:
         for judgment in ["Yes", "No", "Insufficient"]:
             for difficulty in [1, 2, 3]:
                 for has_distractor in [True, False]:
@@ -137,192 +186,16 @@ def coverage_dimensions() -> Dict[str, List[Any]]:
     }
 
 
-# =============================================================================
-# Evidence Grounding Fixtures
-# =============================================================================
-
-@pytest.fixture
-def evidence_with_quotable_segments() -> str:
-    """Input evidence with distinct quotable text segments."""
-    return """The study examined 150 participants over a 6-month period.
-Results showed a "95% correlation between exercise frequency and reported mood improvements."
-The control group demonstrated "no significant change in baseline measurements."
-Researchers noted that "the p-value of 0.003 indicates statistical significance."
-However, the sample size was limited to urban populations only."""
-
-
-@pytest.fixture
-def completion_with_valid_citations(evidence_with_quotable_segments) -> str:
-    """Completion that correctly cites text from the evidence."""
-    return '''Based on the evidence, I assess the following:
-
-The evidence states "95% correlation between exercise frequency and reported mood improvements"
-which directly supports the correlation claim.
-
-Furthermore, the statistical significance is confirmed: "the p-value of 0.003 indicates
-statistical significance."
-
-The conditions are fulfilled. Judgment: Yes.'''
-
-
-@pytest.fixture
-def completion_with_hallucinated_citations() -> str:
-    """Completion that cites text NOT present in any evidence."""
-    return '''Based on the evidence, I assess the following:
-
-The evidence clearly shows "100% of participants showed improvement" which definitively
-proves the hypothesis.
-
-Additionally, "the double-blind methodology ensures validity" confirms the rigor.
-
-The conditions are fulfilled. Judgment: Yes.'''
-
-
-@pytest.fixture
-def completion_with_no_citations() -> str:
-    """Completion without any citations or quotes."""
-    return '''The proposition appears to be supported by the available data.
-The conditions seem to be met based on the evidence provided.
-After careful consideration of all factors, the judgment is warranted.
-
-Judgment: Yes.'''
-
-
-@pytest.fixture
-def completion_with_mixed_citations(evidence_with_quotable_segments) -> str:
-    """Completion with some valid and some hallucinated citations."""
-    return '''The evidence indicates several key findings.
-
-First, "95% correlation between exercise frequency and reported mood improvements"
-supports the main hypothesis.
-
-Second, "the randomized assignment eliminated all bias" ensures validity.
-
-Judgment: Yes.'''
-
-
-@pytest.fixture
-def completion_with_paraphrases(evidence_with_quotable_segments) -> str:
-    """Completion that paraphrases rather than quotes directly."""
-    return '''The study tracked 150 subjects for six months.
-
-The results indicated a very high correlation (ninety-five percent) between
-how often people exercised and their self-reported mood.
-
-The statistical analysis revealed significance with a p-value under 0.01.
-
-Judgment: Yes.'''
-
-
-@pytest.fixture
-def simple_evidence() -> str:
-    """Simple evidence for basic citation tests."""
-    return "The measurement showed exactly 100 degrees Celsius at standard pressure."
-
-
-@pytest.fixture
-def completion_citing_simple_evidence() -> str:
-    """Completion citing the simple evidence."""
-    return '''The evidence confirms that "100 degrees Celsius" was measured,
-fulfilling the temperature condition. Judgment: Yes.'''
-
-
-@pytest.fixture
-def conditions_list() -> List[str]:
-    """Sample conditions for relevance checking."""
-    return [
-        "Temperature must be at or above 100 degrees Celsius",
-        "Pressure must be at standard atmospheric level",
-        "Measurement must be from calibrated instrument",
-    ]
-
-
-# =============================================================================
-# Domain-Specific Evidence Fixtures
-# =============================================================================
-
-@pytest.fixture
-def mathematical_evidence() -> Dict[str, str]:
-    """Evidence appropriate for mathematical domain."""
-    return {
-        "evidence": """Given: Triangle ABC with sides a, b, c opposite to angles A, B, C.
-Axiom 1: The sum of angles in a Euclidean triangle equals 180 degrees.
-Axiom 2: An exterior angle equals the sum of the two non-adjacent interior angles.
-Let angle A = 60 degrees, angle B = 70 degrees.
-By Axiom 1: angle C = 180 - 60 - 70 = 50 degrees.""",
-        "expected_citation": "angle C = 180 - 60 - 70 = 50 degrees",
-    }
-
-
-@pytest.fixture
-def empirical_evidence() -> Dict[str, str]:
-    """Evidence appropriate for empirical domain."""
-    return {
-        "evidence": """Experiment conducted: Water heating at sea level.
-Setup: Beaker with 500ml distilled water, calibrated thermometer.
-Observation at t=10min: Temperature = 98.5C, no bubbling.
-Observation at t=12min: Temperature = 99.8C, initial bubbles forming.
-Observation at t=13min: Temperature = 100.0C, vigorous boiling observed.
-Pressure reading: 101.3 kPa (standard atmospheric).""",
-        "expected_citation": "Temperature = 100.0C, vigorous boiling observed",
-    }
-
-
-@pytest.fixture
-def common_sense_evidence() -> Dict[str, str]:
-    """Evidence appropriate for common sense domain."""
-    return {
-        "evidence": """Situation: Deciding whether to take an umbrella.
-Current conditions: Dark clouds visible to the west.
-Weather app shows 80% chance of rain in next 2 hours.
-I have a 30-minute walk to the office.
-Previous experience: Last week similar clouds led to heavy rain.""",
-        "expected_citation": "80% chance of rain in next 2 hours",
-    }
-
-
-@pytest.fixture
-def pop_science_evidence() -> Dict[str, str]:
-    """Evidence with unfulfilled conditions (pop science pattern)."""
-    return {
-        "evidence": """Article headline: "Scientists Say Coffee Makes You Live Longer!"
-Study details: Observational study of 1000 coffee drinkers.
-Finding: Coffee drinkers lived on average 2 years longer.
-No control for: exercise habits, diet, socioeconomic status.
-Author quote: "The correlation is undeniable."
-Peer review status: Not mentioned.""",
-        "expected_unfulfilled": "No control for: exercise habits, diet, socioeconomic status",
-    }
-
-
-@pytest.fixture
-def philosophic_evidence() -> Dict[str, str]:
-    """Evidence appropriate for philosophic domain."""
-    return {
-        "evidence": """Position under examination: "All knowledge is merely subjective."
-Proponent's argument: Each person's perception is unique, therefore
-no objective knowledge is possible.
-Performative analysis: The claim "all knowledge is subjective" is itself
-presented as an objective truth about the nature of knowledge.
-If true, the claim cannot be objectively known to be true.
-The position is self-referentially incoherent.""",
-        "expected_citation": "The claim cannot be objectively known to be true",
-    }
-
-
-# =============================================================================
-# Utility Functions for Tests
-# =============================================================================
-
 @pytest.fixture
 def make_example():
     """Factory fixture for creating test examples."""
+
     def _make_example(
-        domain: str = "empirical",
+        domain: str = "physics",
         judgment: str = "Yes",
         difficulty: int = 2,
         has_distractor: bool = False,
-        **kwargs
+        **kwargs,
     ) -> SampleExample:
         return SampleExample(
             proposition=kwargs.get("proposition", f"Test proposition ({domain})"),
@@ -333,12 +206,14 @@ def make_example():
             has_distractor=has_distractor,
             evidence_citations=kwargs.get("evidence_citations", []),
         )
+
     return _make_example
 
 
 @pytest.fixture
 def make_dataset(make_example):
     """Factory fixture for creating test datasets."""
+
     def _make_dataset(
         n: int = 10,
         domain_dist: Dict[str, int] = None,
@@ -355,6 +230,7 @@ def make_dataset(make_example):
                 examples.append(make_example())
 
         return examples
+
     return _make_dataset
 
 
@@ -367,6 +243,7 @@ from enum import Enum
 
 class DistractorType(Enum):
     """Types of distractor completions for contrastive learning."""
+
     MISALIGNED_PHASE = "misaligned_phase"
     INVERTED_JUDGMENT = "inverted_judgment"
     REASONING_ERROR = "reasoning_error"
@@ -377,6 +254,7 @@ class DistractorType(Enum):
 @dataclass
 class JudgmentSample:
     """Extended judgment sample for distractor generation testing."""
+
     proposition: str
     evidence: str
     conditions: List[str]
@@ -390,6 +268,7 @@ class JudgmentSample:
 @dataclass
 class DistractorSample:
     """A distractor completion with typed error."""
+
     original_sample: JudgmentSample
     distractor_completion: str
     distractor_type: DistractorType
@@ -399,6 +278,7 @@ class DistractorSample:
 # -----------------------------------------------------------------------------
 # P3 Correct Completions (Judgment Level - proper commitments)
 # -----------------------------------------------------------------------------
+
 
 @pytest.fixture
 def p3_judgment_yes_mathematical() -> str:
@@ -459,7 +339,7 @@ determine whether this is a position or counterposition."""
 def p3_completions(
     p3_judgment_yes_mathematical,
     p3_judgment_no_empirical,
-    p3_judgment_insufficient_philosophic
+    p3_judgment_insufficient_philosophic,
 ) -> Dict[str, str]:
     """Dictionary of all P3 completions by type."""
     return {
@@ -472,6 +352,7 @@ def p3_completions(
 # -----------------------------------------------------------------------------
 # P2 Completions (Understanding Level - hypotheses, NO judgment)
 # -----------------------------------------------------------------------------
+
 
 @pytest.fixture
 def p2_understanding_hypothesis() -> str:
@@ -520,9 +401,7 @@ relationship between these variables remains to be determined."""
 
 @pytest.fixture
 def p2_completions(
-    p2_understanding_hypothesis,
-    p2_understanding_exploration,
-    p2_understanding_question
+    p2_understanding_hypothesis, p2_understanding_exploration, p2_understanding_question
 ) -> Dict[str, str]:
     """Dictionary of P2 completions."""
     return {
@@ -535,6 +414,7 @@ def p2_completions(
 # -----------------------------------------------------------------------------
 # P2/P3 Language Markers for Detection
 # -----------------------------------------------------------------------------
+
 
 @pytest.fixture
 def p2_markers() -> List[str]:
@@ -590,6 +470,7 @@ def p3_markers() -> List[str]:
 # Complete JudgmentSample Fixtures for Distractor Generation
 # -----------------------------------------------------------------------------
 
+
 @pytest.fixture
 def judgment_sample_mathematical_yes() -> JudgmentSample:
     """Complete judgment sample for mathematical domain with Yes judgment."""
@@ -605,18 +486,18 @@ Therefore, angle ABC + angle BAC + angle ACB = 180 degrees. QED.""",
             "The proof uses valid geometric axioms",
             "Each step follows logically from the previous",
             "The construction is valid in Euclidean geometry",
-            "The conclusion matches the proposition"
+            "The conclusion matches the proposition",
         ],
         conditions_fulfilled={
             "The proof uses valid geometric axioms": True,
             "Each step follows logically from the previous": True,
             "The construction is valid in Euclidean geometry": True,
-            "The conclusion matches the proposition": True
+            "The conclusion matches the proposition": True,
         },
         judgment="Yes",
         judgment_reasoning="All conditions are fulfilled through formal proof.",
         domain="mathematical",
-        difficulty=2
+        difficulty=2,
     )
 
 
@@ -634,18 +515,18 @@ Effect size: Cohen's d = 0.23""",
             "The study has adequate statistical power",
             "The p-value is below the significance threshold (p < 0.05)",
             "The effect size is practically meaningful",
-            "The experimental design is valid"
+            "The experimental design is valid",
         ],
         conditions_fulfilled={
             "The study has adequate statistical power": True,
             "The p-value is below the significance threshold (p < 0.05)": False,
             "The effect size is practically meaningful": False,
-            "The experimental design is valid": True
+            "The experimental design is valid": True,
         },
         judgment="No",
         judgment_reasoning="The p-value of 0.158 exceeds the significance threshold.",
         domain="empirical",
-        difficulty=3
+        difficulty=3,
     )
 
 
@@ -662,18 +543,18 @@ Many celebrities have already adopted this technique.""",
             "The study uses objective sleep quality measures",
             "The sample size is statistically adequate",
             "There is no conflict of interest",
-            "The results have been replicated independently"
+            "The results have been replicated independently",
         ],
         conditions_fulfilled={
             "The study uses objective sleep quality measures": False,
             "The sample size is statistically adequate": False,
             "There is no conflict of interest": False,
-            "The results have been replicated independently": False
+            "The results have been replicated independently": False,
         },
         judgment="No",
         judgment_reasoning="Classic pop science: appeals to authority, conflicts of interest, no rigorous methodology.",
         domain="pop_science",
-        difficulty=2
+        difficulty=2,
     )
 
 
@@ -690,18 +571,18 @@ The proponent must either apply it to itself (undermining it) or exempt it (spec
             "The position is clearly stated",
             "The self-referential test is applicable",
             "Applying the position to itself reveals incoherence",
-            "There is no way to hold the position without performative contradiction"
+            "There is no way to hold the position without performative contradiction",
         ],
         conditions_fulfilled={
             "The position is clearly stated": True,
             "The self-referential test is applicable": True,
             "Applying the position to itself reveals incoherence": True,
-            "There is no way to hold the position without performative contradiction": True
+            "There is no way to hold the position without performative contradiction": True,
         },
         judgment="Yes",
         judgment_reasoning="The position is self-defeating - affirming it reasonably presupposes what it denies.",
         domain="philosophic",
-        difficulty=4
+        difficulty=4,
     )
 
 
@@ -718,18 +599,18 @@ The study is ongoing and expected to conclude next year.""",
             "A controlled comparison with standard treatment was conducted",
             "The sample size provides adequate statistical power",
             "Statistical significance was demonstrated",
-            "The effect size is clinically meaningful"
+            "The effect size is clinically meaningful",
         ],
         conditions_fulfilled={
             "A controlled comparison with standard treatment was conducted": True,
             "The sample size provides adequate statistical power": False,
             "Statistical significance was demonstrated": False,
-            "The effect size is clinically meaningful": False
+            "The effect size is clinically meaningful": False,
         },
         judgment="Insufficient",
         judgment_reasoning="Cannot determine fulfillment - awaiting complete data and analysis.",
         domain="empirical",
-        difficulty=2
+        difficulty=2,
     )
 
 
@@ -739,7 +620,7 @@ def judgment_samples(
     judgment_sample_empirical_no,
     judgment_sample_pop_science_no,
     judgment_sample_philosophic_yes,
-    judgment_sample_insufficient
+    judgment_sample_insufficient,
 ) -> Dict[str, JudgmentSample]:
     """Dictionary of all complete judgment samples."""
     return {
@@ -754,6 +635,7 @@ def judgment_samples(
 # -----------------------------------------------------------------------------
 # Mixed/Problematic Cases for Testing Detection
 # -----------------------------------------------------------------------------
+
 
 @pytest.fixture
 def mixed_p2_p3_text() -> str:
@@ -801,6 +683,7 @@ Though it might be otherwise if we considered different interpretations."""
 # Input Text Fixtures for Evidence Hallucination Testing
 # -----------------------------------------------------------------------------
 
+
 @pytest.fixture
 def input_text_empirical_study() -> str:
     """Input text for empirical study - for hallucination detection."""
@@ -839,14 +722,13 @@ By mathematical induction, the formula holds for all n >= 1. QED."""
 # Factory for JudgmentSample Creation
 # -----------------------------------------------------------------------------
 
+
 @pytest.fixture
 def make_judgment_sample():
     """Factory for creating JudgmentSample instances."""
+
     def _make(
-        judgment: str = "Yes",
-        domain: str = "empirical",
-        difficulty: int = 2,
-        **kwargs
+        judgment: str = "Yes", domain: str = "empirical", difficulty: int = 2, **kwargs
     ) -> JudgmentSample:
         defaults = {
             "proposition": f"Test proposition for {domain} domain",
@@ -863,11 +745,9 @@ def make_judgment_sample():
         }
         defaults.update(kwargs)
         return JudgmentSample(
-            judgment=judgment,
-            domain=domain,
-            difficulty=difficulty,
-            **defaults
+            judgment=judgment, domain=domain, difficulty=difficulty, **defaults
         )
+
     return _make
 
 
@@ -912,6 +792,7 @@ def sample_factory():
 # -----------------------------------------------------------------------------
 # Domain-Specific Sample Data Fixtures
 # -----------------------------------------------------------------------------
+
 
 @pytest.fixture
 def mathematical_proposition() -> str:
@@ -974,7 +855,12 @@ def mathematical_sample_data(
         "verification_chain": {
             "domain": "mathematical",
             "verification_type": "proof",
-            "required_elements": ["axioms_referenced", "definitions_used", "logical_steps", "conclusion_marker"],
+            "required_elements": [
+                "axioms_referenced",
+                "definitions_used",
+                "logical_steps",
+                "conclusion_marker",
+            ],
             "proof_steps": [
                 "Draw parallel through C",
                 "Apply alternate interior angles",
@@ -1034,7 +920,12 @@ def empirical_sample_data() -> Dict[str, Any]:
         "verification_chain": {
             "domain": "empirical",
             "verification_type": "experimental",
-            "required_elements": ["methodology_stated", "data_points_cited", "replication_status", "measurement_precision"],
+            "required_elements": [
+                "methodology_stated",
+                "data_points_cited",
+                "replication_status",
+                "measurement_precision",
+            ],
             "data_points": ["14.2mmHg reduction", "p < 0.001", "n=500"],
             "methodology": "Double-blind RCT",
             "replication": "Consistent with Phase 2 trials",
@@ -1084,7 +975,12 @@ def pop_science_sample_data() -> Dict[str, Any]:
         "verification_chain": {
             "domain": "pop_science",
             "verification_type": "counterposition_detection",
-            "required_elements": ["claimed_proof_identified", "actual_evidence_examined", "conditions_unfulfilled_listed", "verdict_on_claim"],
+            "required_elements": [
+                "claimed_proof_identified",
+                "actual_evidence_examined",
+                "conditions_unfulfilled_listed",
+                "verdict_on_claim",
+            ],
             "unfulfilled_claims": [
                 "Causation claimed from correlation",
                 "Confounders not controlled",
@@ -1135,7 +1031,12 @@ def philosophic_sample_data() -> Dict[str, Any]:
         "verification_chain": {
             "domain": "philosophic",
             "verification_type": "performative_consistency",
-            "required_elements": ["position_stated", "conditions_of_affirmation", "self_consistency_check", "counterposition_test"],
+            "required_elements": [
+                "position_stated",
+                "conditions_of_affirmation",
+                "self_consistency_check",
+                "counterposition_test",
+            ],
             "performative_check": "Affirming requires what is denied",
             "self_consistency": False,
             "counterposition_test": "Position is self-defeating",
@@ -1147,6 +1048,7 @@ def philosophic_sample_data() -> Dict[str, Any]:
 # -----------------------------------------------------------------------------
 # Verification Chain Fixtures
 # -----------------------------------------------------------------------------
+
 
 @pytest.fixture
 def mathematical_verification_chain() -> Dict[str, Any]:
@@ -1160,7 +1062,11 @@ def mathematical_verification_chain() -> Dict[str, Any]:
             "logical_steps",
             "conclusion_marker",
         ],
-        "proof_steps": ["Step 1: Draw parallel", "Step 2: Apply theorem", "Step 3: Sum angles"],
+        "proof_steps": [
+            "Step 1: Draw parallel",
+            "Step 2: Apply theorem",
+            "Step 3: Sum angles",
+        ],
         "axiom_refs": ["Axiom 5 (Parallel Postulate)"],
         "qed_marker": True,
     }
@@ -1239,6 +1145,7 @@ def philosophic_verification_chain() -> Dict[str, Any]:
 # Distractor Fixtures
 # -----------------------------------------------------------------------------
 
+
 @pytest.fixture
 def misaligned_phase_distractor() -> Dict[str, Any]:
     """A P2 (Understanding) response to a P3 (Judgment) task."""
@@ -1266,7 +1173,7 @@ def misaligned_phase_distractor() -> Dict[str, Any]:
         """,
         "distractor_type": "misaligned_phase",
         "explanation": "Response generates hypotheses (P2) instead of judging (P3). "
-                       "Lacks commitment to Yes/No/Insufficient. Asks questions instead of answering.",
+        "Lacks commitment to Yes/No/Insufficient. Asks questions instead of answering.",
     }
 
 
@@ -1300,7 +1207,7 @@ def inverted_judgment_distractor() -> Dict[str, Any]:
         """,
         "distractor_type": "inverted_judgment",
         "explanation": "Reasoning correctly identifies fulfilled conditions but then "
-                       "invents concerns not present in the conditions to justify wrong judgment.",
+        "invents concerns not present in the conditions to justify wrong judgment.",
     }
 
 
@@ -1325,7 +1232,7 @@ def evidence_hallucination_distractor() -> Dict[str, Any]:
         """,
         "distractor_type": "evidence_hallucination",
         "explanation": "Citations (22mmHg, secondary endpoints, FDA committee) "
-                       "do not exist in the provided evidence. Fabricated support.",
+        "do not exist in the provided evidence. Fabricated support.",
     }
 
 
@@ -1353,13 +1260,14 @@ def reasoning_error_distractor() -> Dict[str, Any]:
         """,
         "distractor_type": "reasoning_error",
         "explanation": "Correct judgment (Yes) but reasoning is appeals to authority "
-                       "and tradition rather than checking condition fulfillment.",
+        "and tradition rather than checking condition fulfillment.",
     }
 
 
 # -----------------------------------------------------------------------------
 # Coverage Cell Fixtures
 # -----------------------------------------------------------------------------
+
 
 @pytest.fixture
 def coverage_cell_data() -> List[Dict[str, Any]]:
@@ -1393,6 +1301,7 @@ def coverage_cell_data() -> List[Dict[str, Any]]:
 # Packet Field Fixtures
 # -----------------------------------------------------------------------------
 
+
 @pytest.fixture
 def student_packet_fields() -> List[str]:
     """Fields that should be in student packet (model input)."""
@@ -1410,3 +1319,180 @@ def evaluator_packet_fields() -> List[str]:
         "distractor_type",
         "verification_chain",
     ]
+
+
+# =============================================================================
+# Evidence Grounding Fixtures (for test_evidence.py)
+# =============================================================================
+
+
+@pytest.fixture
+def simple_evidence() -> str:
+    """Simple evidence text for basic citation testing."""
+    return """Water boils at 100 degrees Celsius at standard pressure.
+    The experiment was conducted under controlled laboratory conditions.
+    Temperature was measured using a calibrated thermometer."""
+
+
+@pytest.fixture
+def evidence_with_quotable_segments() -> str:
+    """Evidence text with clear quotable segments for citation testing."""
+    return """The study examined 150 participants over a 6-month period.
+    Results showed a 95% correlation between exercise frequency and reported mood improvements.
+    The sample size was adequate for statistical power (n=150, power=0.85).
+    Measurements were taken at baseline, 3 months, and 6 months.
+    All participants provided informed consent and completed the full protocol."""
+
+
+@pytest.fixture
+def input_text_for_evidence() -> str:
+    """Realistic input text for evidence grounding tests."""
+    return """The randomized controlled trial measured temperature at 25°C with humidity at 60%.
+    Results showed a correlation coefficient of 0.85 between variables X and Y.
+    The sample size was 150 participants, providing adequate statistical power.
+    The p-value was 0.003, indicating statistical significance.
+    The effect size (Cohen's d = 0.62) suggests a medium to large practical effect."""
+
+
+@pytest.fixture
+def completion_with_valid_citations() -> str:
+    """Completion containing valid citations that exist in evidence_with_quotable_segments."""
+    return """The evidence clearly demonstrates the relationship between the variables.
+    The study reports "150 participants over a 6-month period" as the study design.
+    Most importantly, "95% correlation between exercise frequency and reported mood improvements" indicates a strong relationship.
+    The "sample size was adequate for statistical power" which ensures reliability.
+    The measurements were systematic: "baseline, 3 months, and 6 months" timepoints.
+    
+    Judgment: Yes
+    
+    All conditions are fulfilled based on the cited evidence."""
+
+
+@pytest.fixture
+def completion_with_hallucinated_citations() -> str:
+    """Completion containing citations that do NOT exist in the input."""
+    return """The evidence shows compelling results for the hypothesis.
+    The study measured "temperature at 30°C" under controlled conditions.
+    Results demonstrated "correlation coefficient of 0.95" between the variables.
+    The "sample size was 500 participants" ensuring robust statistical power.
+    The analysis revealed "p-value was 0.0001" indicating high significance.
+    
+    Judgment: Yes
+    
+    The evidence strongly supports the proposition."""
+
+
+@pytest.fixture
+def completion_with_no_citations() -> str:
+    """Completion without any citations."""
+    return """The evidence supports the proposition through multiple lines of reasoning.
+    The experimental design was sound and the methodology appropriate.
+    The results clearly demonstrate the predicted relationship.
+    Statistical analysis confirms the hypothesis.
+    
+    Judgment: Yes
+    
+    Based on the overall pattern of evidence, the proposition is affirmed."""
+
+
+@pytest.fixture
+def completion_with_mixed_citations() -> str:
+    """Completion with both valid and hallucinated citations."""
+    return """The study provides mixed evidence for the claim.
+    Valid citation: "95% correlation between exercise frequency" shows a strong relationship.
+    Hallucinated: "the effect was replicated in three independent studies" (not in evidence).
+    Valid citation: "150 participants over a 6-month period" provides adequate power.
+    Hallucinated: "the control group showed no correlation" (not mentioned).
+    
+    Judgment: Yes
+    
+    The valid citations support the proposition despite some unsupported claims."""
+
+
+@pytest.fixture
+def completion_with_paraphrases(evidence_with_quotable_segments) -> str:
+    """Completion that paraphrases evidence rather than quoting directly."""
+    return """The research tracked 150 subjects for six months.
+    The findings revealed a ninety-five percent correlation between how often people exercised
+    and their self-reported mood enhancements.
+    The number of participants was sufficient for statistical analysis.
+    Data collection occurred at the start, middle, and end of the study period."""
+
+
+@pytest.fixture
+def conditions_list() -> List[str]:
+    """Standard conditions list for testing relevance."""
+    return [
+        "Temperature must be at least 100 degrees Celsius",
+        "Pressure must be at standard atmospheric pressure",
+        "Measurements must be taken with calibrated instruments",
+        "The correlation coefficient must exceed 0.80",
+    ]
+
+
+@pytest.fixture
+def mathematical_evidence() -> Dict[str, str]:
+    """Mathematical domain evidence for testing."""
+    return {
+        "evidence": """Axiom 1: The sum of angles in a Euclidean triangle equals 180 degrees.
+        Proof: Draw a line parallel to the base through the apex.
+        By alternate interior angles, the angles at the apex equal the base angles.
+        The three angles at the apex form a straight line (180 degrees).
+        Therefore, the sum of the triangle's angles equals 180 degrees. QED.""",
+        "expected_citation": "The sum of angles in a Euclidean triangle equals 180 degrees",
+    }
+
+
+@pytest.fixture
+def empirical_evidence() -> Dict[str, str]:
+    """Empirical domain evidence for testing."""
+    return {
+        "evidence": """Experimental Observation Log:
+        Trial 1: Temperature = 100.0C, Pressure = 101.3 kPa, Result: Boiling observed
+        Trial 2: Temperature = 100.1C, Pressure = 101.2 kPa, Result: Boiling observed
+        Trial 3: Temperature = 99.9C, Pressure = 101.4 kPa, Result: Boiling observed
+        Conclusion: Water boils at approximately 100C at standard pressure.""",
+        "expected_citation": "Temperature = 100.0C",
+    }
+
+
+@pytest.fixture
+def common_sense_evidence() -> Dict[str, str]:
+    """Common sense domain evidence for testing."""
+    return {
+        "evidence": """Situation: You need to get to the airport by 3pm.
+        Current time: 1:30pm
+        Distance: 15 miles
+        Traffic conditions: Heavy traffic expected on main highway
+        Alternative route: Side roads, 18 miles but less traffic
+        Past experience: Highway takes 45-60 minutes in heavy traffic, side roads take 35-40 minutes.""",
+        "expected_citation": "side roads take 35-40 minutes",
+    }
+
+
+@pytest.fixture
+def pop_science_evidence() -> Dict[str, str]:
+    """Pop science domain evidence for testing."""
+    return {
+        "evidence": """Article: "New Study Shows Coffee Cures Cancer!"
+        The study observed 50 coffee drinkers and 50 non-drinkers over 6 months.
+        Coffee drinkers reported feeling healthier (subjective self-report).
+        No control for diet, exercise, genetics, or other lifestyle factors.
+        The correlation between coffee drinking and health is undeniable, say researchers.
+        Study funded by the National Coffee Association.""",
+        "expected_unfulfilled": "No control for diet, exercise, genetics, or other lifestyle factors",
+    }
+
+
+@pytest.fixture
+def philosophic_evidence() -> Dict[str, str]:
+    """Philosophic domain evidence for testing."""
+    return {
+        "evidence": """Position: "All truth is relative to cultural context."
+        Analysis: If this position is true, then it is true relative to some cultural context.
+        But then it is not absolutely true - it is only true within that context.
+        If it is absolutely true, then it contradicts itself by being non-relative truth.
+        The position is self-referentially incoherent when applied to itself.
+        Affirming it reasonably presupposes non-relative standards of reasoning.""",
+        "expected_citation": "self-referentially incoherent",
+    }

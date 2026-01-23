@@ -4,91 +4,93 @@ Coverage Analyzer for Cognitive Training Data
 Implements Insight 10: Coverage Enforcement Matrix
 
 Tracks multi-dimensional coverage across:
-- Domain: 5 levels (mathematical, empirical, common_sense, pop_science, philosophic)
+- Domain: All domains from principled schema (Mode → Level → Variety)
 - Judgment: 3 levels (Yes, No, Insufficient)
 - Difficulty: 5 levels (1-5)
 - Distractor: 2 levels (True, False)
 
-Total cells: 5 x 3 x 5 x 2 = 150
+Uses the principled domain schema from docs/principled_domain_schema.md
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Tuple, Optional, Union
+from typing import List, Dict, Any, Tuple, Optional, Union, Set
 from itertools import product
 
+# Import from principled schema
+from src.domains import (
+    ALL_DOMAINS,
+    PRINCIPLED_DOMAINS,
+    get_all_domain_names,
+    get_principled_domain,
+    get_principled_prompt_context,
+    FulfillmentMode,
+    MODE_SPECS,
+)
+
 
 # =============================================================================
-# Constants
+# Constants - Derived from Principled Schema
 # =============================================================================
 
-VALID_DOMAINS = {"mathematical", "empirical", "common_sense", "pop_science", "philosophic"}
+
+def _get_valid_domains() -> Set[str]:
+    """Get all valid domain names from the principled schema (35 domains)."""
+    return set(ALL_DOMAINS.keys())
+
+
+# Dynamic domain set - all 35 principled domains
+VALID_DOMAINS = _get_valid_domains()
 VALID_JUDGMENTS = {"Yes", "No", "Insufficient"}
 VALID_DIFFICULTIES = {1, 2, 3, 4, 5}
 VALID_DISTRACTORS = {True, False}
 
-# Domain-specific guidance for targeted generation
-DOMAIN_GUIDANCE = {
-    "mathematical": {
-        "description": "Formal proofs, logical necessity, axiomatic reasoning",
-        "condition_types": ["axioms_referenced", "proof_steps", "logical_coherence"],
-        "hints": [
-            "Use clear axiom references",
-            "Show logical derivation steps",
-            "Include QED or proof marker",
-        ],
-    },
-    "empirical": {
-        "description": "Experimental evidence, data-driven verification",
-        "condition_types": ["methodology", "data_points", "statistical_significance", "replication"],
-        "hints": [
-            "Include specific measurements",
-            "Reference statistical tests",
-            "Note sample sizes and confidence intervals",
-        ],
-    },
-    "common_sense": {
-        "description": "Practical reasoning, everyday judgment",
-        "condition_types": ["situational_context", "practical_outcome", "prior_experience"],
-        "hints": [
-            "Ground in concrete situations",
-            "Reference practical consequences",
-            "Use relatable scenarios",
-        ],
-    },
-    "pop_science": {
-        "description": "Detecting unfulfilled conditions, counterposition identification",
-        "condition_types": ["claimed_evidence", "actual_evidence", "missing_controls"],
-        "hints": [
-            "Include authority claims without substance",
-            "Show correlation claimed as causation",
-            "Demonstrate unfulfilled verification conditions",
-        ],
-    },
-    "philosophic": {
-        "description": "Performative consistency, self-referential analysis",
-        "condition_types": ["position_clarity", "self_reference_test", "counterposition_check"],
-        "hints": [
-            "Include claims about knowledge itself",
-            "Set up self-referential tests",
-            "Show positions that defeat themselves when affirmed",
-        ],
-    },
-}
+
+def _build_domain_guidance() -> Dict[str, Dict[str, Any]]:
+    """
+    Build domain-specific guidance from the principled schema.
+    """
+    guidance = {}
+
+    # Build from principled schema
+    for name, spec in PRINCIPLED_DOMAINS.items():
+        mode_spec = MODE_SPECS.get(spec.mode)
+        guidance[name] = {
+            "description": spec.description,
+            "condition_types": [],  # Could be derived if needed
+            "hints": spec.characteristic_pitfalls[:3]
+            if spec.characteristic_pitfalls
+            else [],
+            "mode": spec.mode.value,
+            "evidential_standards": spec.evidential_standards,
+        }
+
+    # All domains are now in PRINCIPLED_DOMAINS, so no need for separate loop
+    # (The above loop already covers all 35 domains)
+
+    return guidance
+
+
+# Domain-specific guidance - built dynamically from schema
+DOMAIN_GUIDANCE = _build_domain_guidance()
 
 
 # =============================================================================
 # Data Classes
 # =============================================================================
 
+
 @dataclass
 class CoverageDimension:
     """A dimension in the coverage matrix (e.g., domain, judgment type)."""
+
     name: str
     values: List[Any]
 
     def __post_init__(self):
         if not self.values:
-            raise ValueError(f"CoverageDimension '{self.name}' must have at least one value")
+            raise ValueError(
+                f"CoverageDimension '{self.name}' must have at least one value"
+            )
 
     def __len__(self) -> int:
         return len(self.values)
@@ -97,6 +99,7 @@ class CoverageDimension:
 @dataclass
 class CoverageGap:
     """Represents a gap in coverage that needs more examples."""
+
     domain: str
     judgment: str
     difficulty: int
@@ -117,6 +120,7 @@ class CoverageGap:
 @dataclass
 class CoverageReport:
     """Complete coverage analysis report."""
+
     matrix: Dict[Tuple[str, str, int, bool], int]
     gaps: List[CoverageGap]
     coverage_percentage: float
@@ -128,6 +132,7 @@ class CoverageReport:
 # =============================================================================
 # Core Functions
 # =============================================================================
+
 
 def _get_all_cells() -> List[Tuple[str, str, int, bool]]:
     """Generate all possible cells in the coverage matrix."""
@@ -141,7 +146,11 @@ def _get_all_cells() -> List[Tuple[str, str, int, bool]]:
 
 
 def _validate_example(example: Any) -> None:
-    """Validate that an example has valid dimension values."""
+    """
+    Validate that an example has valid dimension values.
+
+    Accepts all 35 domains from the principled schema (ALL_DOMAINS).
+    """
     # Get domain - handle both dict and object
     if isinstance(example, dict):
         domain = example.get("domain")
@@ -152,14 +161,25 @@ def _validate_example(example: Any) -> None:
         judgment = getattr(example, "judgment", None)
         difficulty = getattr(example, "difficulty", None)
 
-    if domain not in VALID_DOMAINS:
-        raise ValueError(f"Invalid domain: {domain}. Must be one of {VALID_DOMAINS}")
+    # Refresh valid domains in case they were updated
+    valid_domains = _get_valid_domains()
+
+    if domain not in valid_domains:
+        raise ValueError(
+            f"Invalid domain: {domain}. "
+            f"Must be one of the {len(valid_domains)} valid domains. "
+            f"Sample: {list(valid_domains)[:5]}..."
+        )
 
     if judgment not in VALID_JUDGMENTS:
-        raise ValueError(f"Invalid judgment: {judgment}. Must be one of {VALID_JUDGMENTS}")
+        raise ValueError(
+            f"Invalid judgment: {judgment}. Must be one of {VALID_JUDGMENTS}"
+        )
 
     if difficulty not in VALID_DIFFICULTIES:
-        raise ValueError(f"Invalid difficulty: {difficulty}. Must be one of {VALID_DIFFICULTIES}")
+        raise ValueError(
+            f"Invalid difficulty: {difficulty}. Must be one of {VALID_DIFFICULTIES}"
+        )
 
 
 def _example_to_cell(example: Any) -> Tuple[str, str, int, bool]:
@@ -202,8 +222,7 @@ def build_coverage_matrix(examples: List[Any]) -> Dict[Tuple[str, str, int, bool
 
 
 def find_coverage_gaps(
-    matrix: Dict[Tuple[str, str, int, bool], int],
-    min_count: int = 2
+    matrix: Dict[Tuple[str, str, int, bool], int], min_count: int = 2
 ) -> List[CoverageGap]:
     """
     Find cells with fewer examples than the minimum threshold.
@@ -243,8 +262,7 @@ def find_coverage_gaps(
 
 
 def get_coverage_percentage(
-    matrix: Dict[Tuple[str, str, int, bool], int],
-    expected_cells: int = 150
+    matrix: Dict[Tuple[str, str, int, bool], int], expected_cells: int = 150
 ) -> float:
     """
     Calculate the percentage of cells that have at least one example.
@@ -264,8 +282,7 @@ def get_coverage_percentage(
 
 
 def get_most_sparse_cells(
-    matrix: Dict[Tuple[str, str, int, bool], int],
-    n: int = 10
+    matrix: Dict[Tuple[str, str, int, bool], int], n: int = 10
 ) -> List[Dict[str, Any]]:
     """
     Get the n cells with the lowest counts.
@@ -283,10 +300,12 @@ def get_most_sparse_cells(
     # Take top n
     sparse = []
     for cell_id, count in sorted_cells[:n]:
-        sparse.append({
-            "cell_id": cell_id,
-            "count": count,
-        })
+        sparse.append(
+            {
+                "cell_id": cell_id,
+                "count": count,
+            }
+        )
 
     return sparse
 
@@ -318,10 +337,7 @@ def generate_target_specification(gap: CoverageGap) -> Dict[str, Any]:
     return spec
 
 
-def balance_batch(
-    examples: List[Any],
-    targets: List[Dict[str, Any]]
-) -> List[Any]:
+def balance_batch(examples: List[Any], targets: List[Dict[str, Any]]) -> List[Any]:
     """
     Balance a batch of examples by down-sampling over-represented cells.
 
@@ -341,7 +357,12 @@ def balance_batch(
     # Find the maximum count we want (based on targets)
     target_cells = set()
     for target in targets:
-        cell = (target["domain"], target["judgment"], target["difficulty"], target["has_distractor"])
+        cell = (
+            target["domain"],
+            target["judgment"],
+            target["difficulty"],
+            target["has_distractor"],
+        )
         target_cells.add(cell)
 
     # Calculate a reasonable cap: e.g., 2x the average non-zero count
@@ -375,6 +396,7 @@ def balance_batch(
 # CoverageAnalyzer Class
 # =============================================================================
 
+
 class CoverageAnalyzer:
     """
     High-level coverage analyzer for training data.
@@ -385,7 +407,7 @@ class CoverageAnalyzer:
     def __init__(
         self,
         dimensions: Optional[List[CoverageDimension]] = None,
-        examples: Optional[List[Any]] = None
+        examples: Optional[List[Any]] = None,
     ):
         """
         Initialize the analyzer.
@@ -470,7 +492,9 @@ class CoverageAnalyzer:
         # Calculate stats
         filled_cells = sum(1 for count in self._matrix.values() if count > 0)
         total_examples = sum(self._matrix.values())
-        coverage_pct = (filled_cells / self.total_cells) * 100.0 if self.total_cells > 0 else 0.0
+        coverage_pct = (
+            (filled_cells / self.total_cells) * 100.0 if self.total_cells > 0 else 0.0
+        )
 
         # Find gaps
         gaps = []
