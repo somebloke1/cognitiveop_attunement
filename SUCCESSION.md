@@ -1,78 +1,53 @@
 # Succession Notes for Next Agent
 
-*Last updated: 2026-01-23 (Session 7)*
+*Last updated: 2026-01-23 (Session 8)*
 
 ## Immediate Context
 
-**PHASE**: 1000-step training run in progress with PipelinedTrainerV2
+**PHASE**: Training run in progress with PipelinedTrainerV2
 
 **WHAT'S RUNNING NOW**:
 - Training: `src/training/pipelined_trainer_v2.py`
 - Data: `data/oracle_generated/judgment_v2_train.jsonl` (896 examples)
 - Output: `models/judgment_v2_full/`
-- Config: batch=4, gens=4, lr=2e-6, steps=1000
-- Estimated time: ~25 hours total (~90s/step)
+- Config: batch=3, gens=5, lr=2e-6, steps=1000, save_steps=25
+- Resuming from: checkpoint-50
 
-**WHAT JUST HAPPENED (Session 7)**:
-1. Built `pipelined_trainer_v2.py` - Native model loading (no TRL dependency), cross-step async pipelining
-2. Solved training instability: token normalization (0.8 exponent), reduced LR to 2e-6
-3. Added CONCISENESS as 7th evaluation dimension
-4. **Added Lonergan synopsis to Gemini evaluator** (~2645 tokens in cached system instruction)
-5. **Added REVERSION as 8th evaluation dimension** (14% weight) - critical for distinguishing Level 3 from Level 2
-6. Created compressed docs (`docs/_compressed/`) for selective system instruction augmentation
-7. Conducted signal loss audit comparing early ideal to current implementation
+**WHAT JUST HAPPENED (Session 8)**:
+1. Implemented structured run logging (`src/logging/run_logger.py`)
+2. Added parallel Gemini evaluation (independent calls, not batch)
+3. Comprehensive ID hierarchy: run_id → step_id → inference_id
+4. JSONL structured logs: `metrics.jsonl`, `inferences.jsonl`
+5. Resilience features: SIGTERM/SIGINT handlers, atomic checkpoints, atexit cleanup
+6. Checkpoint inheritance across run continuation chain
+7. Archived pre-v2 logs to `logs/archive/pre_v2_logging/`
 
-## Training Run Status
+## New Logging Paradigm
 
-**Current metrics (as of step ~14)**:
-- grad_norm: ~2.0 (was ~250 before token normalization fix)
-- loss: ~-0.17 (negative = favoring high-advantage completions, correct)
-- rewards: ~0.26-0.57 range (variance exists, learning possible)
-- speed: ~90s/step
+**Directory structure**:
+```
+logs/
+├── current -> runs/{active_run_id}  (symlink)
+├── runs/
+│   └── {YYYYMMDD_HHMMSS}_{experiment}/
+│       ├── config.json          # Run configuration snapshot
+│       ├── training.log         # Human-readable log
+│       ├── gemini.log          # Gemini API calls
+│       ├── evaluation.log      # Evaluation details
+│       ├── metrics.jsonl       # Per-step structured metrics
+│       ├── inferences.jsonl    # Individual inference records
+│       ├── summary.json        # Written on run completion
+│       ├── checkpoints.json    # Checkpoint manifest
+│       └── parent_run.txt      # Link to parent run if resumed
+└── archive/                     # Historical runs
+```
 
-**Checkpoints**: Save every 100 steps to `models/judgment_v2_full/checkpoint-{step}/`
+**Inference ID format**: `{run_suffix}.{step}.{L|R}.{idx}`
+- L = Local (model generation)
+- R = Remote (Gemini evaluation)
+- Example: `aining.51.L.3` = run ending "aining", step 51, local, index 3
 
-## Key Changes This Session
-
-### 1. REVERSION Dimension Added
-
-**Why**: Reversion is THE critical operation distinguishing judgment (Level 3) from understanding (Level 2). Fulfillment is found by reverting from formulation to "the more rudimentary state—to what is merely sensed or merely conscious, not as formulated but as given."
-
-**What it evaluates**:
-- High: Student cites SPECIFIC evidence, quotes data, points to particular observations
-- Low: Student asserts fulfillment abstractly, manipulates concepts without checking data
-- Zero: Pure inference without reversion to data
-
-**New weight distribution** (8 dimensions):
-| Dimension | Weight |
-|-----------|--------|
-| CONDITION_IDENTIFICATION | 14% |
-| EVIDENCE_MAPPING | 16% |
-| REASONING_VALIDITY | 20% |
-| JUDGMENT_COHERENCE | 16% |
-| OPERATIONAL_FIDELITY | 12% |
-| REVERSION | 14% |
-| AUTHENTIC_INTENT | 3% |
-| CONCISENESS | 5% |
-
-### 2. Compressed Documentation
-
-Created `docs/_compressed/` with 5 documents (~4400 tokens total):
-- `temporal_structure.md` - Temporal reasoning in judgment
-- `counterpositions.md` - Detecting self-defeating claims
-- `self_appropriation.md` - Philosophic domain, performative consistency
-- `interpretation.md` - Expression structure, hermeneutics
-- `domain_schema.md` - Mode-of-fulfillment differentiation
-
-See `docs/_compressed/INDEX.md` for mode-specific inclusion recommendations.
-
-### 3. Signal Loss Audit Results
-
-**Restored**: REVERSION (for judgment)
-
-**Deferred to appropriate operations**:
-- COMMITMENT → Decision/Responsibility model
-- DEVELOPMENTAL_CHARACTER → Creative/Ideational model
+**Run chain**: When resuming, inherits checkpoints from parent runs. `checkpoints_saved` in summary.json includes both inherited and new checkpoints.
 
 ## Quick Commands
 
@@ -81,139 +56,97 @@ See `docs/_compressed/INDEX.md` for mode-specific inclusion recommendations.
 cd /home/dgk/projects/cognitiveop_attunement
 source .venv/bin/activate
 
-# Check if training is running
-ps aux | grep python | grep train
+# Watch live training
+tail -f logs/current/training.log
 
-# Check training progress
-tail -50 logs/training_full.log
+# Check structured metrics
+cat logs/current/metrics.jsonl | tail -5
 
-# Check GPU memory
+# Check inferences
+cat logs/current/inferences.jsonl | tail -10
+
+# View run summary (after completion/interrupt)
+cat logs/current/summary.json
+
+# Check GPU
 nvidia-smi --query-gpu=memory.used --format=csv
 
-# Check current step (parse from log)
-grep "^Step" logs/training_full.log | tail -5
-
-# Run tests (all 34 evaluation tests should pass)
-pytest tests/evaluation/ -v --tb=short
+# Run tests
+pytest tests/ -v --tb=short
 ```
 
 ## Monitoring the Training Run
 
-**Key things to watch**:
+**Key metrics to watch** (from `metrics.jsonl`):
+- `grad_norm`: Should be 1-10 range (was ~250 before normalization fix)
+- `loss`: Trending toward 0 (negative is normal for GRPO)
+- `reward_mean`: Should gradually increase
+- `correct_count/total_count`: Accuracy per batch
 
-1. **grad_norm**: Should stay in 1-10 range. If it spikes to 100+, training is unstable.
+**Inference tracking** (from `inferences.jsonl`):
+- `inference_type: "local"` - Model generations (token_count, char_count)
+- `inference_type: "remote"` - Gemini evals (scores on 8 dimensions)
 
-2. **loss**: Should trend toward 0 over time. Negative loss is correct (GRPO favors high-advantage).
+## Resilience Features
 
-3. **reward mean**: Should gradually increase as model improves.
+1. **Graceful shutdown**: Ctrl+C or SIGTERM triggers emergency checkpoint + clean finalization
+2. **Atomic checkpoints**: Saves to `.tmp_checkpoint-N` then renames (prevents corruption)
+3. **Atexit cleanup**: Backup cleanup for unexpected exits
+4. **Double-finalization guard**: Safe to call finalize() multiple times
 
-4. **Correct judgments**: Log shows "X/4 correct" per batch. Should trend upward.
+## Dashboard Requirements
 
-5. **VRAM**: Should stay under 20GB. If hitting 24GB, reduce batch size.
+**To build**: `scripts/training_dashboard.py` needs updating for new logging paradigm
 
-**Log locations**:
-- `logs/training_full.log` - Main training progress
-- `logs/cognitive_eval.log` - Gemini evaluation details
+**Required features**:
+1. **Run selector**: List all runs from `logs/runs/`, show status (completed/interrupted/in_progress)
+2. **Metrics visualization**: 
+   - Loss over time
+   - Reward mean/std over time
+   - grad_norm over time
+   - Correct count trend
+3. **Inference drill-down**:
+   - View individual completions for a step
+   - See 8-dimension scores from Gemini
+   - Compare across completions
+4. **Run chain view**: Show continuation chain for resumed runs
+
+**Data sources**:
+- `logs/current/` symlink → active run
+- `logs/runs/*/metrics.jsonl` → structured step metrics
+- `logs/runs/*/inferences.jsonl` → individual inference records
+- `logs/runs/*/summary.json` → run metadata and final state
+
+**Note on "run" vs checkpoints**: A "run" is a single execution session (from start to interrupt/completion). Checkpoints are snapshots of model weights within or across runs. A resumed run inherits checkpoints from its parent run chain but is itself a distinct run.
 
 ## Files Modified This Session
 
 | File | Changes |
 |------|---------|
-| `src/evaluation/llm_evaluator.py` | Added REVERSION dimension, Lonergan synopsis, rebalanced weights |
-| `src/training/pipelined_trainer_v2.py` | Token normalization (0.8 exp), diagnostic logging |
-| `docs/_compressed/*.md` | New compressed documentation |
-| `CLAUDE.md` | Updated project state, decisions log |
+| `src/logging/__init__.py` | New module exports |
+| `src/logging/run_logger.py` | RunLogger, StepMetrics, InferenceRecord, ThreadSafeJSONLWriter |
+| `src/evaluation/async_reward.py` | Parallel Gemini calls, run_id/run_logger integration |
+| `src/evaluation/async_evaluator.py` | Individual prompts for parallel eval |
+| `src/evaluation/llm_evaluator.py` | Single completion evaluation support |
+| `src/evaluation/logging_config.py` | QueueHandler setup for async-safe logging |
+| `src/training/pipelined_trainer_v2.py` | Signal handlers, atexit, atomic checkpoints, RunLogger integration |
 
 ## What NOT to Do
 
-1. **Don't kill the training run** unless there's a clear problem
-2. **Don't modify llm_evaluator.py** while training - would invalidate the cache
+1. **Don't kill the training run** unless clearly broken
+2. **Don't modify llm_evaluator.py** while training - would invalidate the Gemini cache
 3. **Don't start another training run** - GPU is occupied
 
 ## If Training Crashes
 
-1. Check the log for error message
-2. Note the last checkpoint saved
-3. Can resume from checkpoint (not implemented yet, would need to add)
-4. Common issues:
-   - CUDA OOM: Reduce batch_size or num_generations
-   - Gemini rate limit: Add delays or reduce batch size
-   - NaN loss: Learning rate too high or gradient explosion
+1. Check `logs/current/summary.json` - should have `status: "failed"` or `"interrupted"`
+2. Check `logs/current/training.log` for error details
+3. Find last checkpoint in `models/judgment_v2_full/checkpoint-*`
+4. Can resume with `resume_from_checkpoint='models/judgment_v2_full/checkpoint-N'`
 
-## Next Steps After This Run
+## Next Steps
 
-1. **Evaluate trained adapter** on held-out validation set
-2. **Compare to base model** - does trained model show improvement?
-3. **Analyze REVERSION scores** - is model learning to revert to data?
-4. **Generate more diverse data** if coverage gaps identified
-5. **Train other operations** (Attention, Understanding, Decision)
-
----
-
-## Continuation Prompt for Next Agent
-
-```
-# Task: Analyze Training Run Progress
-
-## Context
-A 1000-step training run is in progress using PipelinedTrainerV2. The run trains
-Qwen2.5-7B-Instruct to perform Lonergan's cognitive operation of JUDGMENT.
-
-Key recent changes:
-- Added REVERSION dimension (14% weight) to evaluator
-- Added Lonergan synopsis to Gemini system instruction
-- Solved training instability with token normalization
-
-## Your Task
-
-1. **Check training status**:
-   ```bash
-   ps aux | grep python | grep train
-   tail -100 logs/training_full.log
-   ```
-
-2. **Analyze metrics**:
-   - What step is it on?
-   - What's the current grad_norm? (should be 1-10)
-   - What's the loss trend?
-   - What's the mean reward?
-   - How many correct judgments per batch?
-
-3. **Check for problems**:
-   - Any error messages?
-   - Is grad_norm spiking?
-   - Is loss NaN or diverging?
-   - Is reward collapsing to 0?
-
-4. **Document findings**:
-   - Current step and ETA
-   - Key metrics summary
-   - Any concerns
-   - Recommendations
-
-5. **If training completed**:
-   - Check final checkpoint exists
-   - Run validation evaluation
-   - Compare to baseline
-
-## Key Files
-
-- `logs/training_full.log` - Main training log
-- `logs/cognitive_eval.log` - Evaluation details
-- `models/judgment_v2_full/` - Output directory
-- `src/training/pipelined_trainer_v2.py` - Trainer implementation
-
-## Expected Metrics
-
-- grad_norm: 1-10 (was ~250 before fix)
-- loss: trending toward 0 (negative is normal for GRPO)
-- rewards: 0.3-0.7 range with variance
-- speed: ~90s/step
-- correct: trending upward over time
-
-## Do NOT
-
-- Kill the training unless clearly broken
-- Modify llm_evaluator.py (would invalidate cache)
-- Start competing GPU processes
-```
+1. **Monitor current run** - watch metrics, ensure stability
+2. **Build dashboard** - visualize runs with new logging format
+3. **After run completes**: Evaluate trained adapter on validation set
+4. **Compare to baseline**: Does trained model show improvement on REVERSION?

@@ -263,7 +263,7 @@ Different genera (physics, chemistry, biology, psychology) have different sets o
 
 ## Current Project State
 
-**Phase**: Ready for V2 Validation Training. Use `run_enhanced_training.py` (TRL-based).
+**Phase**: Training run in progress (resuming from checkpoint-50). Using `pipelined_trainer_v2.py`.
 
 **Succession Notes**: For context on recent work and troubleshooting guidance, see:
 @/home/dgk/projects/cognitiveop_attunement/SUCCESSION.md
@@ -274,12 +274,14 @@ Different genera (physics, chemistry, biology, psychology) have different sets o
 - `QUICKSTART.md` - Immediate action commands
 - `trainer_clarification.md` - Three trainer implementations explained
 
-**Latest Milestone (2026-01-23)**: PipelinedTrainerV2 running stable 1000-step training:
-- Built native pipelined trainer (`pipelined_trainer_v2.py`): no TRL dependency, cross-step async pipelining
-- Solved training instability: token normalization (0.8 exponent), LR=2e-6, grad_norm now ~2 (was ~250)
-- Added CONCISENESS as 7th evaluation dimension (10% weight)
-- **Added Lonergan synopsis to Gemini evaluator** (~2645 tokens of foundational framework)
-- Training configuration: batch=4, gens=4, steps=1000, ~90s/step
+**Latest Milestone (2026-01-23)**: Structured run logging with resilience features:
+- New `src/logging/` module: RunLogger, StepMetrics, InferenceRecord, ThreadSafeJSONLWriter
+- Parallel Gemini evaluation (independent calls per completion, not batch)
+- Comprehensive ID hierarchy: run_id → step_id → inference_id
+- JSONL structured logs: `metrics.jsonl`, `inferences.jsonl` per run
+- Resilience: SIGTERM/SIGINT handlers, atomic checkpoints, atexit cleanup
+- Checkpoint inheritance across run continuation chain
+- Training configuration: batch=3, gens=5, lr=2e-6, save_steps=25
 
 ## Architectural Decisions
 
@@ -564,7 +566,16 @@ Different genera (physics, chemistry, biology, psychology) have different sets o
   - **Added REVERSION as 8th evaluation dimension** (14% weight): THE critical operation distinguishing Level 3 (judgment) from Level 2 (understanding) - fulfillment found by reverting to data, not manipulating formulations
   - Created `docs/_compressed/` with 5 compressed docs (~4400 tokens): temporal_structure, counterpositions, self_appropriation, interpretation, domain_schema
   - Signal loss audit: identified REVERSION as critical missing piece; deferred COMMITMENT to decision model, DEVELOPMENTAL_CHARACTER to creative model
-  - Training running: 1000 steps, batch=4, gens=4, lr=2e-6, ~90s/step, checkpoints every 100 steps
+- **2026-01-23**: **SESSION 8 - STRUCTURED RUN LOGGING + RESILIENCE**: New logging paradigm with crash recovery.
+  - New `src/logging/` module: RunLogger, StepMetrics, InferenceRecord, ThreadSafeJSONLWriter
+  - Parallel Gemini evaluation: independent API calls per completion (prevents batch score homogenization)
+  - Comprehensive ID hierarchy: run_id → step_id → inference_id (format: `{run_suffix}.{step}.{L|R}.{idx}`)
+  - JSONL structured logs: `metrics.jsonl` (per-step), `inferences.jsonl` (per-inference local+remote)
+  - Resilience features: SIGTERM/SIGINT handlers for graceful shutdown, atomic checkpoint saves (tmp+rename), atexit backup cleanup, double-finalization guard
+  - Checkpoint inheritance: resumed runs inherit checkpoints from parent chain
+  - Fixed off-by-one in start_step display
+  - Archived first 50 steps logs to `logs/archive/pre_v2_logging/`
+  - Training config: batch=3, gens=5, save_steps=25, resuming from checkpoint-50
 
 ## Operational Principles
 
