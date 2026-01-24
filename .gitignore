@@ -40,6 +40,9 @@ ENV/
 
 # Model files (large)
 models/
+
+# Training logs (large, ephemeral)
+logs/
 *.pt
 *.pth
 *.safetensors

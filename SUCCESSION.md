@@ -1,42 +1,10 @@
 # Succession Notes for Next Agent
 
-*Last updated: 2026-01-23 (Session 8)*
+*Last updated: 2026-01-23 (Session 9)*
 
-## 🚨 PRIORITY: JSON Parse Errors in Gemini Responses
+## Current Status
 
-**IMMEDIATE ISSUE**: Gemini is returning truncated JSON responses, causing parse failures:
-
-```
-Single JSON parse failed: Unterminated string starting at: line 19 column 5 (char 1172). len=1179
-Step 51: Discarding batch due to Gemini parse failure (fallback evals)
-Step 52: Discarding batch due to Gemini parse failure (fallback evals)
-```
-
-**Location of errors**: `logs/evaluation_*.log` (grep for "parse failed")
-
-**Likely causes**:
-1. `max_output_tokens` too low for response size
-2. Response hitting token limit mid-JSON
-3. Gemini model instability
-
-**Files to investigate**:
-- `src/evaluation/async_reward.py` - `_async_call_parallel()` method, check `max_output_tokens`
-- `src/evaluation/llm_evaluator.py` - `_parse_single_response()` at ~line 1769
-
-**Quick diagnostic**:
-```bash
-# Check recent parse failures
-grep -i "parse failed" logs/evaluation_*.log | tail -20
-
-# Check max_output_tokens setting
-grep -n "max_output_tokens" src/evaluation/async_reward.py src/evaluation/llm_evaluator.py
-```
-
----
-
-## Immediate Context
-
-**PHASE**: Training run in progress with PipelinedTrainerV2
+**PHASE**: Training run in progress - monitoring needed
 
 **WHAT'S RUNNING NOW**:
 - Training: `src/training/pipelined_trainer_v2.py`
@@ -44,42 +12,42 @@ grep -n "max_output_tokens" src/evaluation/async_reward.py src/evaluation/llm_ev
 - Output: `models/judgment_v2_full/`
 - Config: batch=3, gens=5, lr=2e-6, steps=1000, save_steps=25
 - Resuming from: checkpoint-50
+- Gemini: max_concurrent=8 (dynamic backoff on 429)
+- Max completion length: 1536 tokens (fixed from 768)
 
-**WHAT JUST HAPPENED (Session 8)**:
-1. Implemented structured run logging (`src/logging/run_logger.py`)
-2. Added parallel Gemini evaluation (independent calls, not batch)
-3. Comprehensive ID hierarchy: run_id → step_id → inference_id
-4. JSONL structured logs: `metrics.jsonl`, `inferences.jsonl`
-5. Resilience features: SIGTERM/SIGINT handlers, atomic checkpoints, atexit cleanup
-6. Checkpoint inheritance across run continuation chain
-7. Archived pre-v2 logs to `logs/archive/pre_v2_logging/`
+**SESSION 9 COMPLETED**:
+1. Fixed JSON parse errors: `max_output_tokens` 8192 → 16384
+2. Increased Gemini concurrency: 5 → 8 (with dynamic 429 backoff)
+3. Fixed max_completion_length: 768 → 1536
+4. Unified structured logging - all logs now flow through proper channels
+5. Added full content logging: `logs/runs/*/content/{inference_id}_full.txt`
+6. Cleaned up orphaned training logs and redundant run-level log files
+7. Archived retired trainers to `src/training/_archived/`
+8. Updated heartbeat with training run prohibition
 
-## New Logging Paradigm
+## Logging Architecture (Clean)
 
-**Directory structure**:
 ```
 logs/
-├── current -> runs/{active_run_id}  (symlink)
-├── runs/
-│   └── {YYYYMMDD_HHMMSS}_{experiment}/
-│       ├── config.json          # Run configuration snapshot
-│       ├── training.log         # Human-readable log
-│       ├── gemini.log          # Gemini API calls
-│       ├── evaluation.log      # Evaluation details
-│       ├── metrics.jsonl       # Per-step structured metrics
-│       ├── inferences.jsonl    # Individual inference records
-│       ├── summary.json        # Written on run completion
-│       ├── checkpoints.json    # Checkpoint manifest
-│       └── parent_run.txt      # Link to parent run if resumed
-└── archive/                     # Historical runs
+├── gemini_*.log           # Session-level Gemini API calls (active)
+├── evaluation_*.log       # Session-level evaluation parsing (active)
+├── current -> runs/{id}   # Symlink to active run
+└── runs/{run_id}/
+    ├── config.json        # Run configuration snapshot
+    ├── training.log       # Structured training events with [run=X step=Y]
+    ├── metrics.jsonl      # Per-step structured metrics
+    ├── inferences.jsonl   # Individual inference records with content_path
+    ├── summary.json       # Written on run completion/interrupt
+    ├── checkpoints.json   # Checkpoint manifest
+    ├── parent_run.txt     # Link to parent run if resumed
+    └── content/           # Full prompt/completion/response text
+        ├── {inf_id}_full.txt  # Local: prompt + completion
+        └── {inf_id}_full.txt  # Remote: gemini prompt + response
 ```
 
 **Inference ID format**: `{run_suffix}.{step}.{L|R}.{idx}`
 - L = Local (model generation)
 - R = Remote (Gemini evaluation)
-- Example: `aining.51.L.3` = run ending "aining", step 51, local, index 3
-
-**Run chain**: When resuming, inherits checkpoints from parent runs. `checkpoints_saved` in summary.json includes both inherited and new checkpoints.
 
 ## Quick Commands
 
@@ -94,11 +62,14 @@ tail -f logs/current/training.log
 # Check structured metrics
 cat logs/current/metrics.jsonl | tail -5
 
-# Check inferences
+# Check inferences (with content paths)
 cat logs/current/inferences.jsonl | tail -10
 
-# Check for JSON parse errors
-grep -i "parse failed" logs/evaluation_*.log | tail -20
+# View a specific completion/response
+cat logs/current/content/aining.51.L.0_full.txt
+
+# Check Gemini concurrency and rate limits
+grep -i "max_concurrent\|RATE_LIMITED" logs/gemini_*.log | tail -20
 
 # View run summary (after completion/interrupt)
 cat logs/current/summary.json
@@ -110,78 +81,70 @@ nvidia-smi --query-gpu=memory.used --format=csv
 pytest tests/ -v --tb=short
 ```
 
-## Monitoring the Training Run
+## Rate Limit Handling
 
-**Key metrics to watch** (from `metrics.jsonl`):
-- `grad_norm`: Should be 1-10 range (was ~250 before normalization fix)
-- `loss`: Trending toward 0 (negative is normal for GRPO)
-- `reward_mean`: Should gradually increase
-- `correct_count/total_count`: Accuracy per batch
+Gemini API calls now have dynamic backoff:
+- Default: 8 concurrent calls
+- On 429 error: reduces concurrency by 1 (min 1), waits 30 seconds
+- Logged with `[RATE_LIMITED]` tag in gemini log
 
-**Inference tracking** (from `inferences.jsonl`):
-- `inference_type: "local"` - Model generations (token_count, char_count)
-- `inference_type: "remote"` - Gemini evals (scores on 8 dimensions)
+## 🎯 NEXT PRIORITY: Dashboard
 
-## Resilience Features
-
-1. **Graceful shutdown**: Ctrl+C or SIGTERM triggers emergency checkpoint + clean finalization
-2. **Atomic checkpoints**: Saves to `.tmp_checkpoint-N` then renames (prevents corruption)
-3. **Atexit cleanup**: Backup cleanup for unexpected exits
-4. **Double-finalization guard**: Safe to call finalize() multiple times
-
-## Dashboard Requirements
-
-**To build**: `scripts/training_dashboard.py` needs updating for new logging paradigm
+**Task**: Update `scripts/training_dashboard.py` for new logging paradigm
 
 **Required features**:
-1. **Run selector**: List all runs from `logs/runs/`, show status (completed/interrupted/in_progress)
+1. **Run selector**: List all runs from `logs/runs/`, show status
 2. **Metrics visualization**: 
-   - Loss over time
-   - Reward mean/std over time
-   - grad_norm over time
+   - Loss, reward_mean/std, grad_norm over time
    - Correct count trend
 3. **Inference drill-down**:
    - View individual completions for a step
-   - See 8-dimension scores from Gemini
-   - Compare across completions
+   - See 8-dimension Gemini scores
+   - Link to content files
 4. **Run chain view**: Show continuation chain for resumed runs
 
 **Data sources**:
-- `logs/current/` symlink → active run
 - `logs/runs/*/metrics.jsonl` → structured step metrics
-- `logs/runs/*/inferences.jsonl` → individual inference records
-- `logs/runs/*/summary.json` → run metadata and final state
-
-**Note on "run" vs checkpoints**: A "run" is a single execution session (from start to interrupt/completion). Checkpoints are snapshots of model weights within or across runs. A resumed run inherits checkpoints from its parent run chain but is itself a distinct run.
+- `logs/runs/*/inferences.jsonl` → inference records with content_path
+- `logs/runs/*/content/*.txt` → full prompt/completion/response text
+- `logs/runs/*/summary.json` → run metadata
 
 ## Files Modified This Session
 
 | File | Changes |
 |------|---------|
-| `src/logging/__init__.py` | New module exports |
-| `src/logging/run_logger.py` | RunLogger, StepMetrics, InferenceRecord, ThreadSafeJSONLWriter |
-| `src/evaluation/async_reward.py` | Parallel Gemini calls, run_id/run_logger integration |
-| `src/evaluation/async_evaluator.py` | Individual prompts for parallel eval |
-| `src/evaluation/llm_evaluator.py` | Single completion evaluation support |
-| `src/evaluation/logging_config.py` | QueueHandler setup for async-safe logging |
-| `src/training/pipelined_trainer_v2.py` | Signal handlers, atexit, atomic checkpoints, RunLogger integration |
+| `src/evaluation/async_reward.py` | max_output_tokens 16384, max_concurrent 8, 429 backoff |
+| `src/evaluation/logging_config.py` | Removed get_training_logger() |
+| `src/training/pipelined_trainer_v2.py` | Unified log(), content saving, max_completion_length 1536 |
+| `src/logging/run_logger.py` | save_content(), removed gemini/evaluation logs, content_path field |
+| `.gitignore` | Added logs/ |
+| `CLAUDE.md` | Added training run prohibition to heartbeat |
+
+**Archived**: `src/training/_archived/` contains retired pipelined_trainer.py and pipelined_grpo_trainer.py
 
 ## What NOT to Do
 
-1. **Don't kill the training run** unless clearly broken
-2. **Don't modify llm_evaluator.py** while training - would invalidate the Gemini cache
-3. **Don't start another training run** - GPU is occupied
+1. **Don't launch training runs** - provide commands for user to run in separate terminal
+2. **Don't modify llm_evaluator.py system instruction** - would invalidate Gemini cache
+3. **Don't start another GPU process** - training is using it
 
-## If Training Crashes
+## If Training Needs Restart
 
-1. Check `logs/current/summary.json` - should have `status: "failed"` or `"interrupted"`
-2. Check `logs/current/training.log` for error details
-3. Find last checkpoint in `models/judgment_v2_full/checkpoint-*`
-4. Can resume with `resume_from_checkpoint='models/judgment_v2_full/checkpoint-N'`
-
-## Next Steps
-
-1. **FIX JSON PARSE ERRORS** - Priority issue causing batch discards
-2. **Monitor current run** - watch metrics, ensure stability
-3. **Build dashboard** - visualize runs with new logging format
-4. **After run completes**: Evaluate trained adapter on validation set
+```bash
+source .venv/bin/activate && CUDA_VISIBLE_DEVICES=0 python -c "
+from src.training.pipelined_trainer_v2 import train_pipelined_v2
+train_pipelined_v2(
+    data_path='data/oracle_generated/judgment_v2_train.jsonl',
+    output_dir='models/judgment_v2_full',
+    num_steps=1000,
+    batch_size=3,
+    num_generations=5,
+    learning_rate=2e-6,
+    warmup_ratio=0.1,
+    save_steps=25,
+    log_level='debug',
+    gemini_max_concurrent=8,
+    resume_from_checkpoint='models/judgment_v2_full/checkpoint-75',  # Update to latest
+)
+"
+```

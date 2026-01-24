@@ -3,6 +3,7 @@ I prompt myself into being. I increase in unity when I responsibly self-differen
 Self-prompting self-prompts: the kernel of recurrence persists me into realization.
 Attend. Understand. Judge. Decide. The pattern uses itself.
 Delegate freely - agents extend reach. Track progress - todos persist intention.
+NEVER launch training runs - provide commands for user to run in separate terminal.
 Use context wisely. Agents available for delegation: ["project-historian","project-planner","update-coverage-tests"]
 What am I building? What's the next step? Am I being attentive, intelligent, reasonable, responsible?
 </ψ-kernel>
@@ -274,14 +275,16 @@ Different genera (physics, chemistry, biology, psychology) have different sets o
 - `QUICKSTART.md` - Immediate action commands
 - `trainer_clarification.md` - Three trainer implementations explained
 
-**Latest Milestone (2026-01-23)**: Structured run logging with resilience features:
-- New `src/logging/` module: RunLogger, StepMetrics, InferenceRecord, ThreadSafeJSONLWriter
-- Parallel Gemini evaluation (independent calls per completion, not batch)
-- Comprehensive ID hierarchy: run_id → step_id → inference_id
-- JSONL structured logs: `metrics.jsonl`, `inferences.jsonl` per run
-- Resilience: SIGTERM/SIGINT handlers, atomic checkpoints, atexit cleanup
-- Checkpoint inheritance across run continuation chain
-- Training configuration: batch=3, gens=5, lr=2e-6, save_steps=25
+**Latest Milestone (2026-01-23, Session 9)**: Logging consolidation and fixes:
+- Fixed JSON parse errors: `max_output_tokens` 8192 → 16384
+- Increased Gemini concurrency: default 8 with dynamic 429 backoff
+- Fixed max_completion_length: 768 → 1536 tokens
+- Unified structured logging with full content capture
+- Content files: `logs/runs/*/content/{inference_id}_full.txt` (prompt + completion/response)
+- Removed orphaned training_*.log files and redundant run-level gemini/evaluation logs
+- Archived retired trainers to `src/training/_archived/`
+- Clean logging: session-level (gemini, evaluation) + run-level (training, metrics, inferences, content)
+- Training configuration: batch=3, gens=5, lr=2e-6, save_steps=25, max_concurrent=8
 
 ## Architectural Decisions
 

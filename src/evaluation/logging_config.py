@@ -186,11 +186,6 @@ def get_gemini_logger() -> logging.Logger:
     return get_component_logger("gemini")
 
 
-def get_training_logger() -> logging.Logger:
-    """Get logger for training loop operations."""
-    return get_component_logger("training")
-
-
 def get_surface_logger() -> logging.Logger:
     """Get logger for surface analysis operations."""
     return get_component_logger("surface")

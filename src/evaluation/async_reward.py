@@ -124,18 +124,19 @@ class AsyncGeminiEvaluator:
     Thread safety: All public methods are thread-safe.
     """
     
-    def __init__(self, llm_evaluator: LlmEvaluator, max_concurrent: int = 5, run_id: str = ""):
+    def __init__(self, llm_evaluator: LlmEvaluator, max_concurrent: int = 8, run_id: str = ""):
         """
         Initialize with an existing LlmEvaluator.
         
         Args:
             llm_evaluator: Configured evaluator (handles cache, parsing, etc.)
                            IMPORTANT: Call create_cache() before start() if caching desired.
-            max_concurrent: Maximum concurrent Gemini API calls (default 5)
+            max_concurrent: Maximum concurrent Gemini API calls (default 8)
             run_id: Unique run identifier for logging
         """
         self.llm_evaluator = llm_evaluator
         self.max_concurrent = max_concurrent
+        self._current_concurrent = max_concurrent  # Dynamic, may decrease on 429
         self._run_id = run_id
         
         # Async infrastructure
@@ -143,6 +144,10 @@ class AsyncGeminiEvaluator:
         self._thread: Optional[Thread] = None
         self._running = False
         self._semaphore: Optional[asyncio.Semaphore] = None
+        
+        # Rate limit backoff state
+        self._rate_limit_backoff_until: float = 0.0  # Timestamp when backoff ends
+        self._rate_limit_lock = Lock()
         
         # Request tracking
         self._pending: Dict[int, AsyncRequest] = {}
@@ -178,9 +183,11 @@ class AsyncGeminiEvaluator:
         self._thread = Thread(target=self._run_loop, daemon=True, name="AsyncGemini")
         self._thread.start()
         
-        self._semaphore = asyncio.Semaphore(self.max_concurrent)
+        self._current_concurrent = self.max_concurrent  # Reset on start
+        self._semaphore = asyncio.Semaphore(self._current_concurrent)
         self._gemini_log.info("=== ASYNC GEMINI EVALUATOR THREAD STARTED ===")
-        self._gemini_log.info(f"Ready to process evaluation requests (max_concurrent={self.max_concurrent})")
+        self._gemini_log.info(f"Ready to process evaluation requests (max_concurrent={self._current_concurrent})")
+        self._gemini_log.info(f"Rate limit backoff: reduce concurrency by 1, wait 30s on 429")
         
     def stop(self) -> None:
         """Stop the background thread and cleanup."""
@@ -199,6 +206,31 @@ class AsyncGeminiEvaluator:
             
         if self._gemini_log:
             self._gemini_log.info("AsyncGeminiEvaluator stopped")
+    
+    async def _handle_rate_limit(self, inference_id: str) -> None:
+        """
+        Handle rate limit (429) error by reducing concurrency and backing off.
+        
+        - Reduces _current_concurrent by 1 (minimum 1)
+        - Sets backoff period of 30 seconds
+        - Waits for backoff before returning
+        """
+        with self._rate_limit_lock:
+            old_concurrent = self._current_concurrent
+            if self._current_concurrent > 1:
+                self._current_concurrent -= 1
+            
+            # Set backoff until 30 seconds from now
+            self._rate_limit_backoff_until = time.time() + 30.0
+            
+            self._gemini_log.warning(
+                f"[inf_id={inference_id}] RATE_LIMITED: reducing concurrency {old_concurrent} -> {self._current_concurrent}, "
+                f"backing off 30s"
+            )
+        
+        # Wait for backoff period
+        await asyncio.sleep(30.0)
+        self._gemini_log.info(f"[inf_id={inference_id}] Rate limit backoff complete, resuming")
         
     def _run_loop(self) -> None:
         """Background thread entry point - runs the event loop."""
@@ -402,7 +434,7 @@ class AsyncGeminiEvaluator:
             "temperature": self.llm_evaluator.temperature,
             "top_p": self.llm_evaluator.top_p,
             "top_k": self.llm_evaluator.top_k,
-            "max_output_tokens": 8192,  # Increased from 4096 to handle full JSON responses
+            "max_output_tokens": 16384,  # Increased to handle schema overhead + full JSON responses
             "response_mime_type": "application/json",
             "response_schema": EvaluationResponse,  # Single, not batch
         }
@@ -464,6 +496,14 @@ class AsyncGeminiEvaluator:
                     # Log structured inference record for remote call
                     if self._run_logger and HAS_INFERENCE_RECORD:
                         from datetime import datetime
+                        
+                        # Save prompt and response content
+                        content_path = self._run_logger.save_content(
+                            inference_id=inference_id,
+                            content_type="full",
+                            content=f"=== PROMPT ===\n{prompt}\n\n=== RESPONSE ===\n{raw}",
+                        )
+                        
                         record = InferenceRecord(
                             run_id=self.run_id,
                             step_id=step_id,
@@ -476,6 +516,7 @@ class AsyncGeminiEvaluator:
                             status="completed",
                             finish_reason=str(finish_reason) if finish_reason else None,
                             response_len=len(raw),
+                            content_path=content_path,
                             response_id=response_id,
                             judgment_correct=eval_result.judgment_correct,
                             scores={
@@ -496,8 +537,23 @@ class AsyncGeminiEvaluator:
                     
                 except Exception as e:
                     inf_elapsed = time.time() - inf_start
+                    error_str = str(e)
+                    
+                    # Check for rate limit error (429)
+                    is_rate_limit = (
+                        "429" in error_str or 
+                        "RESOURCE_EXHAUSTED" in error_str or
+                        "ResourceExhausted" in type(e).__name__ or
+                        "TooManyRequests" in type(e).__name__ or
+                        "rate limit" in error_str.lower()
+                    )
+                    
+                    if is_rate_limit:
+                        await self._handle_rate_limit(inference_id)
+                    
                     self._gemini_log.error(
                         f"[inf_id={inference_id}] API_FAILED after {inf_elapsed:.1f}s: {type(e).__name__}: {e}"
+                        + (" [RATE_LIMITED]" if is_rate_limit else "")
                     )
                     fallback = self.llm_evaluator._create_fallback_evaluation(
                         surface_analyses[idx], expected_judgment, str(e)
@@ -515,7 +571,7 @@ class AsyncGeminiEvaluator:
                             start_time=datetime.fromtimestamp(inf_start).isoformat(),
                             end_time=datetime.now().isoformat(),
                             duration_s=inf_elapsed,
-                            status="failed",
+                            status="rate_limited" if is_rate_limit else "failed",
                             error=f"{type(e).__name__}: {e}",
                             is_fallback=True,
                         )
@@ -694,7 +750,7 @@ class PipelinedHybridReward:
         correct_reward: float = 1.0,
         incorrect_reward: float = -0.5,
         no_judgment_reward: float = -0.3,
-        max_concurrent: int = 5,
+        max_concurrent: int = 8,
         run_id: str = "",
     ):
         """
@@ -708,7 +764,7 @@ class PipelinedHybridReward:
             correct_reward: Reward for correct judgment
             incorrect_reward: Reward for incorrect judgment
             no_judgment_reward: Reward for missing judgment
-            max_concurrent: Max parallel Gemini API calls (default 5)
+            max_concurrent: Max parallel Gemini API calls (default 8, dynamic backoff on 429)
             run_id: Unique run identifier for logging
         """
         self.llm_evaluator = llm_evaluator

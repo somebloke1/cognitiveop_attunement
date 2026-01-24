@@ -40,7 +40,6 @@ if torch.cuda.is_available():
 from src.evaluation.logging_config import (
     setup_logging,
     get_session_timestamp,
-    get_training_logger,
     get_eval_logger,
 )
 
@@ -49,9 +48,47 @@ import atexit
 import shutil
 
 
-def log(msg):
-    """Print with flush for immediate visibility."""
-    print(msg, flush=True)
+# Module-level logger reference (set by trainer after RunLogger init)
+_run_logger: Optional['RunLogger'] = None
+
+def log(
+    msg: str,
+    level: str = "info",
+    run_id: Optional[str] = None,
+    step_id: Optional[int] = None,
+    **context
+):
+    """
+    Log message to both console and structured run log.
+    
+    Before RunLogger initialization: prints to console only.
+    After initialization: writes to both console and logs/runs/*/training.log.
+    
+    Args:
+        msg: Log message
+        level: Log level (debug, info, warning, error)
+        run_id: Run identifier (auto-included if _run_logger set)
+        step_id: Step identifier for step-scoped messages
+        **context: Additional structured context (key=value)
+    """
+    # Build structured prefix
+    prefix_parts = []
+    if run_id:
+        prefix_parts.append(f"run={run_id[-8:]}")
+    elif _run_logger:
+        prefix_parts.append(f"run={_run_logger.run_id[-8:]}")
+    if step_id is not None:
+        prefix_parts.append(f"step={step_id}")
+    for k, v in context.items():
+        prefix_parts.append(f"{k}={v}")
+    
+    prefix = f"[{' '.join(prefix_parts)}] " if prefix_parts else ""
+    full_msg = f"{prefix}{msg}"
+    
+    print(full_msg, flush=True)
+    if _run_logger is not None:
+        logger = _run_logger.training
+        getattr(logger, level)(full_msg)
 
 
 @dataclass
@@ -70,14 +107,14 @@ class PipelinedTrainerConfig:
     learning_rate: float = 2e-6
     warmup_ratio: float = 0.1
     max_grad_norm: float = 1.0
-    max_completion_length: int = 768
+    max_completion_length: int = 1536
     temperature: float = 0.8
     top_p: float = 0.95
     top_k: int = 50
     use_gemini_cache: bool = True
     gemini_cache_ttl: int = 172800
     gemini_model: str = "gemini-3-flash-preview"
-    gemini_max_concurrent: int = 5  # Max parallel Gemini API calls per step
+    gemini_max_concurrent: int = 8  # Max parallel Gemini API calls per step (dynamic backoff on 429)
     save_steps: int = 50
     output_dir: str = "models/pipelined_output"
     log_steps: int = 10
@@ -119,7 +156,6 @@ class PipelinedTrainerV2:
         self.resume_from_checkpoint = resume_from_checkpoint
         self.experiment_name = experiment_name
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.logger = get_training_logger()
         self.eval_logger = get_eval_logger()
         self.model = None
         self.tokenizer = None
@@ -374,6 +410,12 @@ class PipelinedTrainerV2:
             config=run_config,
             resume_from=self.resume_from_checkpoint,
         )
+        
+        # Enable structured logging via module-level reference
+        global _run_logger
+        _run_logger = self.run_logger
+        self._run_id = self.run_logger.run_id
+        
         self._last_loss = None
         self._last_reward_mean = None
         
@@ -383,14 +425,15 @@ class PipelinedTrainerV2:
         
         def graceful_shutdown(signum, frame):
             sig_name = "SIGTERM" if signum == signal.SIGTERM else "SIGINT"
-            log(f"\n*** Received {sig_name} - initiating graceful shutdown ***")
+            step = getattr(self, '_current_step', None)
+            log(f"Received {sig_name} - initiating graceful shutdown", step_id=step, level="warning", signal=sig_name)
             # Save emergency checkpoint
-            if hasattr(self, '_current_step') and self._current_step > self._start_step:
+            if step is not None and step > self._start_step:
                 try:
-                    log(f"Saving emergency checkpoint at step {self._current_step}...")
-                    self._save_checkpoint(self._current_step, final=False)
+                    log("Saving emergency checkpoint...", step_id=step)
+                    self._save_checkpoint(step, final=False)
                 except Exception as e:
-                    log(f"Emergency checkpoint failed: {e}")
+                    log(f"Emergency checkpoint failed: {e}", step_id=step, level="error")
             # Re-raise as KeyboardInterrupt to trigger normal exception handling
             raise KeyboardInterrupt(f"Graceful shutdown from {sig_name}")
         
@@ -518,13 +561,13 @@ class PipelinedTrainerV2:
         """
         t0 = time.time()
         
-        log(f"Step {step}: Generating...")
+        log("Generating...", step_id=step)
         gen_start = time.time()
         step_data = self._generate_completions(step, batch)
         gen_time = time.time() - gen_start
-        log(f"  Generated {len(step_data.completions)} completions in {gen_time:.1f}s")
+        log(f"Generated {len(step_data.completions)} completions in {gen_time:.1f}s", step_id=step)
         
-        log(f"Step {step}: Firing Gemini async...")
+        log("Firing Gemini async...", step_id=step)
         fire_start = time.time()
         self.pipelined_evaluator.fire_evaluation(
             step_id=step,
@@ -539,7 +582,7 @@ class PipelinedTrainerV2:
         )
         step_data.fired_at = time.time()
         fire_time = time.time() - fire_start
-        log(f"  Fired in {fire_time:.2f}s")
+        log(f"Fired in {fire_time:.2f}s", step_id=step)
         
         loss = None
         wait_time = 0.0
@@ -547,23 +590,23 @@ class PipelinedTrainerV2:
         
         if step == 0:
             # First step: must wait synchronously (nothing to overlap with)
-            log(f"Step {step}: Waiting for Gemini (sync, first step)...")
+            log("Waiting for Gemini (sync, first step)...", step_id=step)
             wait_start = time.time()
             rewards = self.pipelined_evaluator.get_rewards(step)
             wait_time = time.time() - wait_start
             
             if rewards is None:
                 # Gemini parse failed - skip this step
-                log(f"  Step {step}: SKIPPED (Gemini parse failure)")
+                log("SKIPPED (Gemini parse failure)", step_id=step, level="warning")
                 del step_data
             else:
-                log(f"  Got rewards in {wait_time:.1f}s: {rewards}")
+                log(f"Got rewards in {wait_time:.1f}s: {rewards}", step_id=step)
                 
-                log(f"Step {step}: Updating weights...")
+                log("Updating weights...", step_id=step)
                 update_start = time.time()
                 loss = self._update_weights(step_data, rewards)
                 update_time = time.time() - update_start
-                log(f"  Loss: {loss:.4f} in {update_time:.1f}s")
+                log(f"Loss: {loss:.4f} in {update_time:.1f}s", step_id=step)
                 
                 # Log structured metrics for step 0
                 step_total = time.time() - t0
@@ -582,28 +625,28 @@ class PipelinedTrainerV2:
             
         elif self._pending_step is None:
             # Second step: setup pipeline (no previous to update yet)
-            log(f"Step {step}: Pipeline setup (pending={step})")
+            log(f"Pipeline setup (pending={step})", step_id=step)
             self._pending_step = step_data
             
         else:
             # Third+ step: true pipelining
             prev = self._pending_step.step_id
-            log(f"Step {step}: Waiting for step {prev}'s Gemini...")
+            log(f"Waiting for step {prev}'s Gemini...", step_id=step)
             wait_start = time.time()
             prev_rewards = self.pipelined_evaluator.get_rewards(prev)
             wait_time = time.time() - wait_start
             
             if prev_rewards is None:
                 # Gemini parse failed for previous step - skip its update
-                log(f"  Step {prev}: SKIPPED (Gemini parse failure)")
+                log("SKIPPED (Gemini parse failure)", step_id=prev, level="warning")
             else:
-                log(f"  Got rewards for step {prev} in {wait_time:.1f}s: {prev_rewards}")
+                log(f"Got rewards in {wait_time:.1f}s: {prev_rewards}", step_id=prev)
                 
-                log(f"Step {step}: Updating weights for step {prev}...")
+                log(f"Updating weights for step {prev}...", step_id=step)
                 update_start = time.time()
                 loss = self._update_weights(self._pending_step, prev_rewards)
                 update_time = time.time() - update_start
-                log(f"  Loss: {loss:.4f} in {update_time:.1f}s")
+                log(f"Loss: {loss:.4f} in {update_time:.1f}s", step_id=prev)
                 
                 # Log structured metrics for the PREVIOUS step (whose weights we just updated)
                 # Note: gen_time for prev step was captured when prev was current - we don't have it here
@@ -626,7 +669,7 @@ class PipelinedTrainerV2:
             
         total_time = time.time() - t0
         timing = f"gen={gen_time:.1f}s fire={fire_time:.2f}s wait={wait_time:.1f}s update={update_time:.1f}s total={total_time:.1f}s"
-        log(f"Step {step} TIMING: {timing}")
+        log(f"TIMING: {timing}", step_id=step)
         
         self.metrics["step"].append(step)
         self.metrics["gen_time"].append(gen_time)
@@ -651,19 +694,19 @@ class PipelinedTrainerV2:
         if self._pending_step is None:
             return
         drain_step = self._pending_step.step_id
-        log(f"Draining pipeline: step {drain_step}")
+        log("Draining pipeline...", step_id=drain_step)
         
         wait_start = time.time()
         rewards = self.pipelined_evaluator.get_rewards(drain_step)
         wait_time = time.time() - wait_start
         
         if rewards is None:
-            log(f"  Step {drain_step}: SKIPPED (Gemini parse failure)")
+            log("SKIPPED (Gemini parse failure)", step_id=drain_step, level="warning")
         else:
             update_start = time.time()
             loss = self._update_weights(self._pending_step, rewards)
             update_time = time.time() - update_start
-            log(f"  Drained: loss={loss:.4f}")
+            log(f"Drained: loss={loss:.4f}", step_id=drain_step)
             
             # Log structured metrics for drained step
             self._log_step_completed(
@@ -815,6 +858,13 @@ class PipelinedTrainerV2:
                 start_offset = (gen_time / len(completions)) * i
                 start_time = datetime.fromtimestamp(gen_start + start_offset)
                 
+                # Save full prompt + completion content
+                content_path = self.run_logger.save_content(
+                    inference_id=inference_id,
+                    content_type="full",
+                    content=f"=== PROMPT ===\n{prompt}\n\n=== COMPLETION ===\n{comp}",
+                )
+                
                 record = InferenceRecord(
                     run_id=run_id_full,
                     step_id=step,
@@ -827,6 +877,7 @@ class PipelinedTrainerV2:
                     status="completed",
                     token_count=comp_tokens,
                     char_count=len(comp),
+                    content_path=content_path,
                 )
                 self.run_logger.log_inference(record)
         
@@ -1021,7 +1072,7 @@ class PipelinedTrainerV2:
                 shutil.rmtree(checkpoint_dir)
             shutil.move(str(tmp_checkpoint_dir), str(checkpoint_dir))
         
-        log(f"*** Checkpoint saved: {checkpoint_dir} ***")
+        log(f"Checkpoint saved: {checkpoint_dir}", step_id=step, checkpoint=str(checkpoint_dir))
         
         # Track current step for emergency saves
         self._current_step = step
@@ -1045,7 +1096,7 @@ def train_pipelined_v2(
     lora_alpha: int = 192,
     use_gemini_cache: bool = True,
     gemini_cache_ttl: int = 172800,
-    gemini_max_concurrent: int = 5,
+    gemini_max_concurrent: int = 8,
     save_steps: int = 50,
     log_steps: int = 10,
     log_level: str = "info",
@@ -1070,7 +1121,7 @@ def train_pipelined_v2(
         lora_alpha: LoRA alpha (typically 2x rank)
         use_gemini_cache: Enable Gemini context caching
         gemini_cache_ttl: Cache TTL in seconds
-        gemini_max_concurrent: Max parallel Gemini API calls (default 5)
+        gemini_max_concurrent: Max parallel Gemini API calls (default 8, dynamic backoff on 429)
         save_steps: Save checkpoint every N steps
         log_steps: Log metrics every N steps
         log_level: Logging verbosity

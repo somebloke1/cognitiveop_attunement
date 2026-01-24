@@ -136,6 +136,9 @@ class InferenceRecord:
     scores: Optional[Dict[str, float]] = None
     is_fallback: Optional[bool] = None
     
+    # Content reference (path to full text, if saved)
+    content_path: Optional[str] = None
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict, excluding None values."""
         return {k: v for k, v in asdict(self).items() if v is not None}
@@ -307,6 +310,7 @@ class RunLogger:
         """Create the run directory structure."""
         self.LOGS_ROOT.mkdir(parents=True, exist_ok=True)
         self.run_dir.mkdir(parents=True, exist_ok=True)
+        (self.run_dir / "content").mkdir(parents=True, exist_ok=True)
     
     def _save_config(self, config: RunConfig):
         """Save configuration snapshot."""
@@ -400,7 +404,9 @@ class RunLogger:
         self._log_queues = {}
         self._queue_listeners = {}
         
-        for name in ["training", "gemini", "evaluation"]:
+        # Only training log is run-specific
+        # gemini and evaluation logs are session-level (in logs/*.log)
+        for name in ["training"]:
             # Create logger
             logger = logging.getLogger(f"run.{self.run_id}.{name}")
             logger.setLevel(self.log_level)
@@ -510,6 +516,33 @@ class RunLogger:
             record: InferenceRecord with inference details
         """
         self._inference_writer.write(record.to_dict())
+    
+    def save_content(
+        self,
+        inference_id: str,
+        content_type: str,
+        content: str,
+    ) -> str:
+        """
+        Save full content (prompt/completion/response) to content directory.
+        
+        Args:
+            inference_id: Unique inference ID (e.g., "aining.51.L.0")
+            content_type: Type of content ("prompt", "completion", "response", "full")
+            content: The full text content to save
+            
+        Returns:
+            Relative path to the saved content file
+        """
+        # Sanitize inference_id for filename
+        safe_id = inference_id.replace("/", "_").replace("..", "_")
+        filename = f"{safe_id}_{content_type}.txt"
+        filepath = self.run_dir / "content" / filename
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        return f"content/{filename}"
     
     def log_checkpoint(self, checkpoint_path: str, step: int):
         """Record a saved checkpoint."""

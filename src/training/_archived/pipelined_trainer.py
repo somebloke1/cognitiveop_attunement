@@ -28,7 +28,7 @@ from src.evaluation.llm_evaluator import LlmEvaluator
 from src.evaluation.logging_config import (
     setup_logging,
     get_session_timestamp,
-    get_training_logger,
+
     get_eval_logger,
 )
 
@@ -95,7 +95,6 @@ class PipelinedTrainer:
         self.train_dataset = train_dataset
         self.eval_dataset = eval_dataset
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.logger = get_training_logger()
         self.eval_logger = get_eval_logger()
         self.model = None
         self.tokenizer = None
@@ -344,15 +343,15 @@ class PipelinedTrainer:
         oracle_temporal_context = self._get_field(batch, "oracle_temporal_context", "")
         mode = self._get_field(batch, "mode", "")
         
-        self.logger.debug(f"[step={step}] _generate_completions: tokenizing prompt ({len(prompt)} chars)")
+        # Debug logging removed - trainer retired
         prompt_encoding = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=4096)
         prompt_ids = prompt_encoding["input_ids"].to(self.device)
         prompt_mask = prompt_encoding["attention_mask"].to(self.device)
-        self.logger.debug(f"[step={step}] _generate_completions: prompt_ids shape={prompt_ids.shape}")
+
         
         self.model.gradient_checkpointing_disable()
         self.model.config.use_cache = True
-        self.logger.debug(f"[step={step}] _generate_completions: generating {self.config.num_generations} completions")
+
         
         completions = []
         all_completion_ids = []
@@ -360,7 +359,7 @@ class PipelinedTrainer:
         with torch.no_grad():
             for i in range(self.config.num_generations):
                 gen_start = time.time()
-                self.logger.debug(f"[step={step}] _generate_completions: starting generation {i+1}/{self.config.num_generations}")
+
                 outputs = self.model.generate(
                     input_ids=prompt_ids,
                     attention_mask=prompt_mask,
