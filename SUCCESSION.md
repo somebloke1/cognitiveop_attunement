@@ -2,6 +2,38 @@
 
 *Last updated: 2026-01-23 (Session 8)*
 
+## 🚨 PRIORITY: JSON Parse Errors in Gemini Responses
+
+**IMMEDIATE ISSUE**: Gemini is returning truncated JSON responses, causing parse failures:
+
+```
+Single JSON parse failed: Unterminated string starting at: line 19 column 5 (char 1172). len=1179
+Step 51: Discarding batch due to Gemini parse failure (fallback evals)
+Step 52: Discarding batch due to Gemini parse failure (fallback evals)
+```
+
+**Location of errors**: `logs/evaluation_*.log` (grep for "parse failed")
+
+**Likely causes**:
+1. `max_output_tokens` too low for response size
+2. Response hitting token limit mid-JSON
+3. Gemini model instability
+
+**Files to investigate**:
+- `src/evaluation/async_reward.py` - `_async_call_parallel()` method, check `max_output_tokens`
+- `src/evaluation/llm_evaluator.py` - `_parse_single_response()` at ~line 1769
+
+**Quick diagnostic**:
+```bash
+# Check recent parse failures
+grep -i "parse failed" logs/evaluation_*.log | tail -20
+
+# Check max_output_tokens setting
+grep -n "max_output_tokens" src/evaluation/async_reward.py src/evaluation/llm_evaluator.py
+```
+
+---
+
 ## Immediate Context
 
 **PHASE**: Training run in progress with PipelinedTrainerV2
@@ -64,6 +96,9 @@ cat logs/current/metrics.jsonl | tail -5
 
 # Check inferences
 cat logs/current/inferences.jsonl | tail -10
+
+# Check for JSON parse errors
+grep -i "parse failed" logs/evaluation_*.log | tail -20
 
 # View run summary (after completion/interrupt)
 cat logs/current/summary.json
@@ -146,7 +181,7 @@ pytest tests/ -v --tb=short
 
 ## Next Steps
 
-1. **Monitor current run** - watch metrics, ensure stability
-2. **Build dashboard** - visualize runs with new logging format
-3. **After run completes**: Evaluate trained adapter on validation set
-4. **Compare to baseline**: Does trained model show improvement on REVERSION?
+1. **FIX JSON PARSE ERRORS** - Priority issue causing batch discards
+2. **Monitor current run** - watch metrics, ensure stability
+3. **Build dashboard** - visualize runs with new logging format
+4. **After run completes**: Evaluate trained adapter on validation set
