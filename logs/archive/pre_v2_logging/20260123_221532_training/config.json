@@ -1,0 +1,23 @@
+{
+  "run_id": "20260123_221532_training",
+  "experiment_name": "training",
+  "start_time": "2026-01-23T22:15:32.107630",
+  "config": {
+    "data_path": "",
+    "output_dir": "models/judgment_v2_full",
+    "num_steps": 1000,
+    "batch_size": 3,
+    "num_generations": 5,
+    "learning_rate": 2e-06,
+    "warmup_ratio": 0.1,
+    "save_steps": 25,
+    "model_name": "Qwen/Qwen2.5-7B-Instruct",
+    "resume_from_checkpoint": "models/judgment_v2_full/checkpoint-50",
+    "extra": {
+      "lora_r": 96,
+      "lora_alpha": 192,
+      "gradient_checkpointing": true,
+      "max_completion_length": 768
+    }
+  }
+}

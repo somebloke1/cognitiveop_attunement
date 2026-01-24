@@ -31,8 +31,10 @@ from google.genai import types
 from .llm_evaluator import (
     LlmEvaluator,
     SemanticEvaluation,
+    EvaluationResponse,
     BatchEvaluationResponse,
     EVALUATOR_SYSTEM_INSTRUCTION,
+    EVALUATION_PROMPT_ENHANCED,
     _extract_gemini_metadata,
 )
 from .surface_analyzer import SurfaceAnalysis
@@ -44,10 +46,12 @@ class PrefetchRequest:
     """A request queued for async Gemini evaluation."""
 
     step_id: int
-    user_prompt: str
+    user_prompt: str  # Legacy: batch prompt (deprecated)
     num_completions: int
     expected_judgment: str
     surface_analyses: List[SurfaceAnalysis]
+    # NEW: Individual prompts for parallel evaluation
+    individual_prompts: List[str] = None
     # Will be populated when response arrives
     future: asyncio.Future = None
 
@@ -183,44 +187,30 @@ class AsyncPrefetchEvaluator:
 
     async def _async_evaluate(self, request: PrefetchRequest) -> None:
         """
-        Async coroutine that calls Gemini and stores result.
+        Async coroutine that evaluates completions in PARALLEL.
+        
+        Each completion gets its own independent Gemini call, ensuring
+        truly independent scoring without batch homogenization.
         """
         gemini_log = get_gemini_logger()
 
         try:
-            # Build config (same as sync version)
-            config_params = {
-                "temperature": self.llm_evaluator.temperature,
-                "top_p": self.llm_evaluator.top_p,
-                "top_k": self.llm_evaluator.top_k,
-                "max_output_tokens": 16384,
-                "response_mime_type": "application/json",
-                "response_schema": BatchEvaluationResponse,
-            }
-
-            if self.llm_evaluator._cache_name:
-                config_params["cached_content"] = self.llm_evaluator._cache_name
-
-            # Async Gemini call
-            response = await self._async_client.models.generate_content(
-                model=self.llm_evaluator.model_name,
-                contents=request.user_prompt,
-                config=types.GenerateContentConfig(**config_params),
-            )
-
-            # Log metadata
-            metadata = _extract_gemini_metadata(response)
-            gemini_log.debug(
-                f"Async response step={request.step_id} {metadata.to_log_string()}"
-            )
-
-            # Parse response
-            raw_response = response.text or ""
-            semantic_evals = self.llm_evaluator._parse_batch_response(
-                raw_response,
-                request.expected_judgment,
-                request.surface_analyses,
-            )
+            # Use individual prompts if available, otherwise fall back to batch
+            if request.individual_prompts:
+                semantic_evals = await self._evaluate_parallel(
+                    request.step_id,
+                    request.individual_prompts,
+                    request.expected_judgment,
+                    request.surface_analyses,
+                )
+            else:
+                # Legacy batch path
+                semantic_evals = await self._evaluate_batch(
+                    request.step_id,
+                    request.user_prompt,
+                    request.expected_judgment,
+                    request.surface_analyses,
+                )
 
             result = PrefetchResult(
                 step_id=request.step_id,
@@ -253,6 +243,119 @@ class AsyncPrefetchEvaluator:
             self._results[request.step_id] = result
             if request.step_id in self._pending_requests:
                 del self._pending_requests[request.step_id]
+
+    async def _evaluate_parallel(
+        self,
+        step_id: int,
+        individual_prompts: List[str],
+        expected_judgment: str,
+        surface_analyses: List[SurfaceAnalysis],
+    ) -> List[SemanticEvaluation]:
+        """
+        Evaluate completions in parallel with independent Gemini calls.
+        
+        This ensures each completion gets truly independent scoring,
+        avoiding the batch homogenization problem.
+        """
+        gemini_log = get_gemini_logger()
+        n = len(individual_prompts)
+        
+        # Config for single evaluation (not batch)
+        config_params = {
+            "temperature": self.llm_evaluator.temperature,
+            "top_p": self.llm_evaluator.top_p,
+            "top_k": self.llm_evaluator.top_k,
+            "max_output_tokens": 4096,  # Smaller for single eval
+            "response_mime_type": "application/json",
+            "response_schema": EvaluationResponse,  # Single, not batch
+        }
+        
+        if self.llm_evaluator._cache_name:
+            config_params["cached_content"] = self.llm_evaluator._cache_name
+        
+        async def eval_single(idx: int, prompt: str) -> tuple[int, SemanticEvaluation]:
+            """Evaluate single completion, return (index, result)."""
+            try:
+                response = await self._async_client.models.generate_content(
+                    model=self.llm_evaluator.model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(**config_params),
+                )
+                
+                raw = response.text or ""
+                # Parse single evaluation response
+                eval_result = self.llm_evaluator._parse_single_response(
+                    raw, expected_judgment, surface_analyses[idx]
+                )
+                return (idx, eval_result)
+                
+            except Exception as e:
+                gemini_log.warning(
+                    f"Parallel eval {idx} failed step={step_id}: {e}"
+                )
+                fallback = self.llm_evaluator._create_fallback_evaluation(
+                    surface_analyses[idx], expected_judgment, str(e)
+                )
+                return (idx, fallback)
+        
+        # Fire all evaluations in parallel
+        tasks = [eval_single(i, p) for i, p in enumerate(individual_prompts)]
+        results = await asyncio.gather(*tasks)
+        
+        # Sort by index to maintain order
+        results.sort(key=lambda x: x[0])
+        semantic_evals = [r[1] for r in results]
+        
+        gemini_log.debug(
+            f"Parallel eval step={step_id}: {n} completions evaluated independently"
+        )
+        
+        return semantic_evals
+
+    async def _evaluate_batch(
+        self,
+        step_id: int,
+        user_prompt: str,
+        expected_judgment: str,
+        surface_analyses: List[SurfaceAnalysis],
+    ) -> List[SemanticEvaluation]:
+        """
+        Legacy batch evaluation (single call for all completions).
+        
+        DEPRECATED: Use _evaluate_parallel for independent scoring.
+        """
+        gemini_log = get_gemini_logger()
+        
+        config_params = {
+            "temperature": self.llm_evaluator.temperature,
+            "top_p": self.llm_evaluator.top_p,
+            "top_k": self.llm_evaluator.top_k,
+            "max_output_tokens": 16384,
+            "response_mime_type": "application/json",
+            "response_schema": BatchEvaluationResponse,
+        }
+
+        if self.llm_evaluator._cache_name:
+            config_params["cached_content"] = self.llm_evaluator._cache_name
+
+        response = await self._async_client.models.generate_content(
+            model=self.llm_evaluator.model_name,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(**config_params),
+        )
+
+        metadata = _extract_gemini_metadata(response)
+        gemini_log.debug(
+            f"Batch response step={step_id} {metadata.to_log_string()}"
+        )
+
+        raw_response = response.text or ""
+        return self.llm_evaluator._parse_batch_response(
+            raw_response,
+            expected_judgment,
+            surface_analyses,
+            metadata.finish_reason,
+        )
 
     def get_result(self, step_id: int, timeout: float = 120.0) -> PrefetchResult:
         """

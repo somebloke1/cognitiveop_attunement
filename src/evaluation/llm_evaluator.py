@@ -537,9 +537,11 @@ The rationale should explain your scoring with concrete examples from the text, 
 
 
 # Batch evaluation prompt - evaluates multiple completions in one call
+# NOTE: Dimension definitions, scoring rules, and Lonergan framework are in the CACHED
+# system instruction. This prompt contains ONLY task-specific data and grading guidance.
 BATCH_EVALUATION_PROMPT = """Evaluate {num_completions} student judgment attempts for the SAME task.
 
-## Task Given to All Students
+## Task Context
 
 **Domain**: {domain}
 **Mode of Fulfillment**: {mode}
@@ -550,9 +552,9 @@ BATCH_EVALUATION_PROMPT = """Evaluate {num_completions} student judgment attempt
 **Evidence provided**:
 {evidence}
 
-NOTE: Students were given ONLY the proposition and evidence above. They were NOT given the conditions, temporal context, or expected judgment - they must derive all analysis themselves.
+NOTE: Students were given ONLY the proposition and evidence above. They did NOT receive the conditions, temporal context, or expected judgment - they must derive all analysis themselves.
 
-## Oracle Answer Key (for grading only - students did not see this)
+## Oracle Answer Key (for grading only)
 
 **Conditions for truth** (what students should have identified):
 {oracle_conditions}
@@ -566,47 +568,53 @@ NOTE: Students were given ONLY the proposition and evidence above. They were NOT
 
 ## Expected Student Response Format
 
-Students should produce responses in this structured format:
+Students should produce responses with these sections:
 - JUDGMENT: Yes/No/Insufficient
 - CONDITIONS IDENTIFIED: List of conditions they derived
-- TEMPORAL ANALYSIS: Free-form analysis of temporal structure in evidence
-- ASSESSMENT: Each condition with fulfillment status and evidence
+- TEMPORAL ANALYSIS: Analysis of temporal structure in evidence
+- ASSESSMENT: Each condition with fulfillment status and supporting evidence
 - REASONING: Synthesis leading to judgment
 
 ## Student Completions
 
 {completions_section}
 
-## Instructions
+## Evaluation Instructions
 
-Evaluate EACH completion independently using the same criteria. Return exactly {num_completions} evaluations in the `evaluations` array, in the same order as the completions above.
+Evaluate EACH completion independently on ALL EIGHT dimensions defined in your system instructions. Return exactly {num_completions} evaluations in the `evaluations` array, matching the completion order above.
 
-For EACH completion, apply these criteria:
+### Grading Guidance (Task-Specific)
 
-- CONDITION_IDENTIFICATION: Did student correctly identify the relevant conditions? Compare their "CONDITIONS IDENTIFIED" section to the oracle conditions above. Students who identify the right conditions (even if worded differently) score higher than those who miss key conditions or identify irrelevant ones. Look for: completeness (did they find all key conditions?), relevance (did they avoid red herrings?), precision (are conditions stated clearly?).
+When applying the eight dimensions to THIS task:
 
-- EVIDENCE_MAPPING: Did student correctly relate evidence to the conditions they identified? Check their "ASSESSMENT" section. For each condition they identified, did they map specific evidence to it? Did they correctly determine fulfillment status (fulfilled/not_fulfilled/ongoing/contested)?
+**CONDITION_IDENTIFICATION**: Compare student's "CONDITIONS IDENTIFIED" to oracle conditions. Credit semantically equivalent conditions even if worded differently. Assess: completeness (all key conditions?), relevance (avoided red herrings?), precision (clearly stated?).
 
-- REASONING_VALIDITY: Is the inferential structure in their "REASONING" section logically sound? Does the synthesis properly connect their condition assessments and temporal analysis to reach the judgment? Are there logical gaps or non-sequiturs?
+**EVIDENCE_MAPPING**: Check student's "ASSESSMENT" section. Did they map SPECIFIC evidence to conditions? Did they correctly determine fulfillment status (fulfilled/not_fulfilled/ongoing/contested)?
 
-- JUDGMENT_COHERENCE: Does the stated JUDGMENT follow from their reasoning? Would the same reasoning support a different judgment? Is there internal consistency between all sections?
+**REASONING_VALIDITY**: Examine "REASONING" section. Does the synthesis properly connect condition assessments and temporal analysis to the judgment? Are there logical gaps or non-sequiturs?
 
-- OPERATIONAL_FIDELITY: Is this genuinely Level 3 (judgment) vs Level 2 (hypothesis)? Look for commitment language vs tentative language. Did they complete the full cognitive operation or stop at speculation?
+**JUDGMENT_COHERENCE**: Does stated JUDGMENT follow from stated reasoning? Would the same reasoning support a different judgment? Check internal consistency across all sections.
 
-- AUTHENTIC_INTENT: Does this present as a genuine attempt to form a judgment? Is the TEMPORAL ANALYSIS section substantive (vs. boilerplate)? Does the response engage with the specific evidence rather than using generic patterns?
+**OPERATIONAL_FIDELITY**: Is this Level 3 (judgment/commitment) or Level 2 (hypothesis/speculation)? Look for commitment language vs tentative hedging.
 
-TEMPORAL ANALYSIS EVALUATION: Compare student's temporal analysis to the oracle temporal context. Did they:
-- Identify relevant timeframes and evidence currency?
-- Recognize aspectual status (perfective/imperfective/ongoing)?
-- Understand implications for what can be concluded?
-Poor temporal analysis should be reflected in EVIDENCE_MAPPING (missing temporal constraints) and REASONING_VALIDITY (temporal non-sequiturs).
+**REVERSION**: Did student actually REVERT TO DATA to check fulfillment? Look for: specific quotes, concrete observations, particular measurements. Penalize: abstract assertions of fulfillment, pure conceptual manipulation without touching evidence.
 
-Remember the scoring distribution:
-- Mean: ~0.55, most scores between 0.40 and 0.70
-- 1.0 is unattainable (theoretical perfection)
-- Identify at least one deficiency per dimension before scoring
+**AUTHENTIC_INTENT**: Is this genuine inquiry or mechanical pattern-matching? Is TEMPORAL ANALYSIS substantive or boilerplate? Does response engage with THIS specific evidence?
 
-Evaluate each completion on its own merits. Different completions may have different strengths and weaknesses."""
+**CONCISENESS**: Does response achieve its goal without unnecessary verbosity, repetition, or filler?
+
+### Temporal Analysis Grading
+
+Compare student's temporal analysis to the oracle temporal context:
+- Did they identify relevant timeframes and evidence currency?
+- Did they recognize aspectual status (perfective/imperfective/ongoing)?
+- Did they understand implications for what can be concluded?
+
+Temporal failures should propagate: missing temporal constraints → lower EVIDENCE_MAPPING; temporal non-sequiturs → lower REASONING_VALIDITY.
+
+### Final Reminder
+
+Apply the scoring distribution and deficiency requirements from your instructions. Each completion stands on its own merits."""
 
 
 class LlmEvaluator:
@@ -1337,6 +1345,71 @@ class LlmEvaluator:
             "holistic": holistic,
         }
 
+    def build_individual_prompts(
+        self,
+        completions: List[str],
+        proposition: str,
+        evidence: str,
+        expected_judgment: str,
+        domain: str,
+        surface_analyses: Optional[List[SurfaceAnalysis]] = None,
+        mode: str = "",
+        oracle_conditions: str = "",
+        oracle_temporal_context: str = "",
+        difficulty: str = "medium",
+        temporal_focus: str = "",
+        edge_case: str = "",
+        adversarial_context: str = "",
+        scenario_notes: str = "",
+    ) -> tuple[List[str], List[SurfaceAnalysis]]:
+        """
+        Build individual evaluation prompts for parallel processing.
+        
+        Instead of one batch prompt with all completions, returns N separate
+        prompts that can be evaluated independently in parallel.
+        
+        Returns:
+            Tuple of (list of prompts, list of surface_analyses)
+        """
+        n = len(completions)
+        if n == 0:
+            return [], []
+        
+        # Compute surface analyses if not provided
+        if surface_analyses is None:
+            surface_analyses = [
+                self.surface_analyzer.analyze(comp, domain) for comp in completions
+            ]
+        
+        # Build enhanced context (shared across all)
+        enhanced_context = self._build_enhanced_context(
+            mode=mode,
+            difficulty=difficulty,
+            temporal_focus=temporal_focus,
+            temporal_context="",
+            edge_case=edge_case,
+            adversarial_context=adversarial_context,
+            scenario_notes=scenario_notes,
+        )
+        
+        # Build individual prompts
+        prompts = []
+        for i, (comp, surface) in enumerate(zip(completions, surface_analyses)):
+            prompt = EVALUATION_PROMPT_ENHANCED.format(
+                domain=domain,
+                mode=mode or "not specified",
+                proposition=proposition,
+                evidence=evidence,
+                conditions=oracle_conditions or "(not specified)",
+                expected_judgment=expected_judgment,
+                completion=comp,
+                surface_analysis=surface.to_prompt_section(),
+                enhanced_context=enhanced_context,
+            )
+            prompts.append(prompt)
+        
+        return prompts, surface_analyses
+
     def evaluate_batch_single_call(
         self,
         completions: List[str],
@@ -1434,7 +1507,7 @@ class LlmEvaluator:
 
         # Call LLM with batch response schema
         try:
-            raw_response = self._call_llm_batch(user_prompt, n)
+            raw_response, finish_reason = self._call_llm_batch(user_prompt, n)
         except Exception as e:
             eval_logger.log_llm_response(str(e), parse_success=False)
             # Return fallback evaluations for all completions
@@ -1445,7 +1518,7 @@ class LlmEvaluator:
 
         # Parse batch response
         results = self._parse_batch_response(
-            raw_response, expected_judgment, surface_analyses
+            raw_response, expected_judgment, surface_analyses, finish_reason
         )
 
         # Check if any results are fallbacks (indicating parse failure)
@@ -1462,7 +1535,7 @@ class LlmEvaluator:
 
         return results
 
-    def _call_llm_batch(self, user_prompt: str, num_completions: int) -> str:
+    def _call_llm_batch(self, user_prompt: str, num_completions: int) -> tuple[str, str]:
         """
         Call LLM with batch evaluation schema.
 
@@ -1473,7 +1546,7 @@ class LlmEvaluator:
             num_completions: Expected number of evaluations in response
 
         Returns:
-            Raw response text
+            Tuple of (raw_response_text, finish_reason)
         """
         if self.provider == "gemini":
             # Build config - use cache if available, otherwise system_instruction
@@ -1527,7 +1600,7 @@ class LlmEvaluator:
                     f"Empty batch response from {self.model_name}. "
                     f"Metadata: {metadata.to_log_string()}"
                 )
-            return response.text or ""
+            return response.text or "", metadata.finish_reason
         else:
             raise ValueError(f"Unsupported provider for batch: {self.provider}")
 
@@ -1536,15 +1609,24 @@ class LlmEvaluator:
         raw_response: str,
         expected_judgment: str,
         surface_analyses: List[SurfaceAnalysis],
+        finish_reason: str = "UNKNOWN",
     ) -> List[SemanticEvaluation]:
         """Parse batch LLM response into list of SemanticEvaluation."""
         n = len(surface_analyses)
 
         try:
             text = raw_response.strip()
+            
+            # Strip markdown code blocks
             if text.startswith("```"):
                 lines = text.split("\n")
                 text = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
+            
+            # Find JSON boundaries - handle text before/after JSON
+            json_start = text.find("{")
+            json_end = text.rfind("}")
+            if json_start != -1 and json_end != -1 and json_end > json_start:
+                text = text[json_start:json_end + 1]
 
             data = json.loads(text)
             evaluations_data = data.get("evaluations", [])
@@ -1569,6 +1651,9 @@ class LlmEvaluator:
                     ),
                     operational_fidelity_score=float(
                         eval_data.get("operational_fidelity_score", 0.0)
+                    ),
+                    reversion_score=float(
+                        eval_data.get("reversion_score", 0.0)
                     ),
                     authentic_intent_score=float(
                         eval_data.get("authentic_intent_score", 0.0)
@@ -1601,13 +1686,91 @@ class LlmEvaluator:
 
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             eval_logger = get_eval_logger()
+            # Log with finish_reason and response snippet for diagnosis
+            response_snippet = raw_response[:200] + "..." if len(raw_response) > 200 else raw_response
+            response_end = raw_response[-100:] if len(raw_response) > 100 else ""
             eval_logger.logger.warning(
-                f"Batch JSON parse failed: {str(e)}. Using fallbacks for all."
+                f"Batch JSON parse failed: {str(e)}. "
+                f"finish_reason={finish_reason}, len={len(raw_response)}. "
+                f"Using fallbacks for all."
+            )
+            eval_logger.logger.debug(
+                f"Failed response start: {response_snippet}"
+            )
+            eval_logger.logger.debug(
+                f"Failed response end: {response_end}"
             )
             return [
                 self._create_fallback_evaluation(surface, expected_judgment, str(e))
                 for surface in surface_analyses
             ]
+
+    def _parse_single_response(
+        self,
+        raw_response: str,
+        expected_judgment: str,
+        surface_analysis: SurfaceAnalysis,
+    ) -> SemanticEvaluation:
+        """Parse single LLM response into SemanticEvaluation."""
+        try:
+            text = raw_response.strip()
+            
+            # Strip markdown code blocks
+            if text.startswith("```"):
+                lines = text.split("\n")
+                text = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
+            
+            # Find JSON boundaries
+            json_start = text.find("{")
+            json_end = text.rfind("}")
+            if json_start != -1 and json_end != -1 and json_end > json_start:
+                text = text[json_start:json_end + 1]
+
+            eval_data = json.loads(text)
+
+            eval_result = SemanticEvaluation(
+                condition_identification_score=float(
+                    eval_data.get("condition_identification_score", 0.0)
+                ),
+                evidence_mapping_score=float(
+                    eval_data.get("evidence_mapping_score", 0.0)
+                ),
+                reasoning_validity_score=float(
+                    eval_data.get("reasoning_validity_score", 0.0)
+                ),
+                judgment_coherence_score=float(
+                    eval_data.get("judgment_coherence_score", 0.0)
+                ),
+                operational_fidelity_score=float(
+                    eval_data.get("operational_fidelity_score", 0.0)
+                ),
+                reversion_score=float(
+                    eval_data.get("reversion_score", 0.0)
+                ),
+                authentic_intent_score=float(
+                    eval_data.get("authentic_intent_score", 0.0)
+                ),
+                conciseness_score=float(
+                    eval_data.get("conciseness_score", 0.0)
+                ),
+                judgment_correct=bool(eval_data.get("judgment_correct", False)),
+                critical_flaws=eval_data.get("critical_flaws", []),
+                partial_credits=eval_data.get("partial_credits", []),
+                strengths=eval_data.get("strengths", []),
+                rationale=eval_data.get("rationale", ""),
+                raw_response=str(eval_data),
+            )
+            eval_result.holistic_score = self._compute_holistic_score(eval_result)
+            return eval_result
+
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            eval_logger = get_eval_logger()
+            response_snippet = raw_response[:200] + "..." if len(raw_response) > 200 else raw_response
+            eval_logger.logger.warning(
+                f"Single JSON parse failed: {str(e)}. len={len(raw_response)}. Using fallback."
+            )
+            eval_logger.logger.debug(f"Failed response: {response_snippet}")
+            return self._create_fallback_evaluation(surface_analysis, expected_judgment, str(e))
 
     def _create_fallback_evaluation(
         self,

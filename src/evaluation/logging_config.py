@@ -253,7 +253,8 @@ class EvaluationLogger:
 
     def log_batch_summary(self, batch_size: int, rewards: list, mean_reward: float, reward_std: float,
                           correct_count: int = 0, failure_count: int = 0):
-        self.logger.info(f"BATCH_SUMMARY size={batch_size} mean_reward={mean_reward:.4f}")
+        # Always include correct count in summary for dashboard parsing
+        self.logger.info(f"BATCH_SUMMARY size={batch_size} mean_reward={mean_reward:.4f} correct={correct_count}/{batch_size}")
         if failure_count > 0:
             self.logger.warning(f"Batch: {correct_count}/{batch_size} correct, reward={mean_reward:.3f}±{reward_std:.3f}")
 

@@ -1,0 +1,6 @@
+{
+  "checkpoints": [
+    {"path": "models/judgment_v2_full/checkpoint-25", "step": 25},
+    {"path": "models/judgment_v2_full/checkpoint-50", "step": 50}
+  ]
+}

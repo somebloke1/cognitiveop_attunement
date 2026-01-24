@@ -1,0 +1,22 @@
+{
+  "run_id": "20260123_152241_judgment_v2_legacy",
+  "experiment_name": "judgment_v2_legacy",
+  "start_time": "2026-01-23T15:22:41",
+  "config": {
+    "data_path": "data/oracle_generated/judgment_v2_train.jsonl",
+    "output_dir": "models/judgment_v2_full",
+    "num_steps": 1000,
+    "batch_size": 2,
+    "num_generations": 8,
+    "learning_rate": 2e-06,
+    "warmup_ratio": 0.1,
+    "save_steps": 25,
+    "model_name": "Qwen/Qwen2.5-7B-Instruct",
+    "resume_from_checkpoint": null,
+    "extra": {
+      "lora_r": 96,
+      "lora_alpha": 192,
+      "note": "Legacy run - migrated from training_resumed.log"
+    }
+  }
+}

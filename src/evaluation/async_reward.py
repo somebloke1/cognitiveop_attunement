@@ -64,11 +64,21 @@ from .surface_analyzer import SurfaceAnalyzer, SurfaceAnalysis
 from .llm_evaluator import (
     LlmEvaluator,
     SemanticEvaluation,
+    EvaluationResponse,
     BatchEvaluationResponse,
     BATCH_EVALUATION_PROMPT,
+    EVALUATION_PROMPT_ENHANCED,
+    EVALUATOR_SYSTEM_INSTRUCTION,
     _extract_gemini_metadata,
 )
 from .logging_config import get_eval_logger, get_gemini_logger
+
+# Import InferenceRecord for structured logging (optional - may not be available in all contexts)
+try:
+    from src.logging import InferenceRecord
+    HAS_INFERENCE_RECORD = True
+except ImportError:
+    HAS_INFERENCE_RECORD = False
 
 
 # =============================================================================
@@ -114,20 +124,25 @@ class AsyncGeminiEvaluator:
     Thread safety: All public methods are thread-safe.
     """
     
-    def __init__(self, llm_evaluator: LlmEvaluator):
+    def __init__(self, llm_evaluator: LlmEvaluator, max_concurrent: int = 5, run_id: str = ""):
         """
         Initialize with an existing LlmEvaluator.
         
         Args:
             llm_evaluator: Configured evaluator (handles cache, parsing, etc.)
                            IMPORTANT: Call create_cache() before start() if caching desired.
+            max_concurrent: Maximum concurrent Gemini API calls (default 5)
+            run_id: Unique run identifier for logging
         """
         self.llm_evaluator = llm_evaluator
+        self.max_concurrent = max_concurrent
+        self._run_id = run_id
         
         # Async infrastructure
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[Thread] = None
         self._running = False
+        self._semaphore: Optional[asyncio.Semaphore] = None
         
         # Request tracking
         self._pending: Dict[int, AsyncRequest] = {}
@@ -137,6 +152,19 @@ class AsyncGeminiEvaluator:
         # Logging
         self._gemini_log = None
         self._eval_log = None
+        self._run_logger = None
+    
+    @property
+    def run_id(self) -> str:
+        return self._run_id
+    
+    @run_id.setter  
+    def run_id(self, value: str) -> None:
+        self._run_id = value
+    
+    def set_run_logger(self, run_logger) -> None:
+        """Set run logger for structured inference tracking."""
+        self._run_logger = run_logger
         
     def start(self) -> None:
         """Start the background event loop thread."""
@@ -150,8 +178,9 @@ class AsyncGeminiEvaluator:
         self._thread = Thread(target=self._run_loop, daemon=True, name="AsyncGemini")
         self._thread.start()
         
+        self._semaphore = asyncio.Semaphore(self.max_concurrent)
         self._gemini_log.info("=== ASYNC GEMINI EVALUATOR THREAD STARTED ===")
-        self._gemini_log.info("Ready to process evaluation requests")
+        self._gemini_log.info(f"Ready to process evaluation requests (max_concurrent={self.max_concurrent})")
         
     def stop(self) -> None:
         """Stop the background thread and cleanup."""
@@ -194,25 +223,37 @@ class AsyncGeminiEvaluator:
         completions: List[str],
         surface_analyses: List[SurfaceAnalysis],
         expected_judgment: str,
+        individual_prompts: List[str] = None,
     ) -> None:
         """
         Fire an async Gemini request. Returns immediately.
         
         Args:
             step_id: Unique identifier (typically training step number)
-            user_prompt: Formatted batch evaluation prompt for Gemini
+            user_prompt: Formatted batch evaluation prompt for Gemini (legacy)
             completions: Model completions being evaluated
             surface_analyses: Pre-computed local analyses
             expected_judgment: Oracle-verified correct judgment (shared for batch)
+            individual_prompts: If provided, evaluate in parallel with independent calls
+                               (avoids batch homogenization)
         """
         if not self._running:
             raise RuntimeError("AsyncGeminiEvaluator not started - call start() first")
             
-        # Schedule the async call
-        future = asyncio.run_coroutine_threadsafe(
-            self._async_call(step_id, user_prompt, surface_analyses, expected_judgment),
-            self._loop
-        )
+        # Schedule the async call - use parallel if individual prompts provided
+        if individual_prompts:
+            future = asyncio.run_coroutine_threadsafe(
+                self._async_call_parallel(step_id, individual_prompts, surface_analyses, expected_judgment),
+                self._loop
+            )
+            self._gemini_log.info(f"[run={self.run_id}][step={step_id}] PARALLEL REQUEST FIRED: n={len(individual_prompts)}, max_concurrent={self.max_concurrent}, expected={expected_judgment}")
+        else:
+            future = asyncio.run_coroutine_threadsafe(
+                self._async_call(step_id, user_prompt, surface_analyses, expected_judgment),
+                self._loop
+            )
+            self._gemini_log.info(f"[step={step_id}] BATCH REQUEST FIRED: completions={len(completions)}, expected={expected_judgment}")
+            self._gemini_log.debug(f"[step={step_id}] PROMPT ({len(user_prompt)} chars):\n{'='*60}\n{user_prompt}\n{'='*60}")
         
         request = AsyncRequest(
             step_id=step_id,
@@ -225,10 +266,6 @@ class AsyncGeminiEvaluator:
         
         with self._lock:
             self._pending[step_id] = request
-        
-        # Log request details
-        self._gemini_log.info(f"[step={step_id}] REQUEST FIRED: completions={len(completions)}, expected={expected_judgment}")
-        self._gemini_log.debug(f"[step={step_id}] PROMPT ({len(user_prompt)} chars):\n{'='*60}\n{user_prompt}\n{'='*60}")
         
     async def _async_call(
         self,
@@ -254,12 +291,13 @@ class AsyncGeminiEvaluator:
                 "response_schema": BatchEvaluationResponse,
             }
             
-            # Use cached system instruction if available
+            # Use cached system instruction if available, otherwise send full instruction
             if self.llm_evaluator._cache_name:
                 config_params["cached_content"] = self.llm_evaluator._cache_name
                 self._gemini_log.debug(f"[step={step_id}] Using cached content: {self.llm_evaluator._cache_name}")
             else:
-                self._gemini_log.debug(f"[step={step_id}] No cache - sending full system instruction")
+                config_params["system_instruction"] = EVALUATOR_SYSTEM_INSTRUCTION
+                self._gemini_log.debug(f"[step={step_id}] No cache - sending full system instruction ({len(EVALUATOR_SYSTEM_INSTRUCTION)} chars)")
                 
             self._gemini_log.debug(f"[step={step_id}] Calling Gemini API (model={self.llm_evaluator.model_name})...")
                 
@@ -293,7 +331,7 @@ class AsyncGeminiEvaluator:
             )
             
             semantic_evals = self.llm_evaluator._parse_batch_response(
-                raw_response, expected_judgment, surface_analyses
+                raw_response, expected_judgment, surface_analyses, metadata.finish_reason
             )
             
             # Log parsed evaluations
@@ -340,6 +378,221 @@ class AsyncGeminiEvaluator:
             self._results[step_id] = result
             self._pending.pop(step_id, None)
             self._gemini_log.debug(f"[step={step_id}] Result stored, pending count={len(self._pending)}")
+    
+    async def _async_call_parallel(
+        self,
+        step_id: int,
+        individual_prompts: List[str],
+        surface_analyses: List[SurfaceAnalysis],
+        expected_judgment: str,
+    ) -> None:
+        """
+        Evaluate completions in PARALLEL with independent Gemini calls.
+        
+        This avoids the batch homogenization problem where Gemini anchors
+        all scores similarly when evaluating multiple completions together.
+        """
+        start = time.time()
+        n = len(individual_prompts)
+        
+        self._gemini_log.debug(f"[step={step_id}] PARALLEL_CALL starting, n={n} independent evals")
+        
+        # Config for single evaluation
+        config_params = {
+            "temperature": self.llm_evaluator.temperature,
+            "top_p": self.llm_evaluator.top_p,
+            "top_k": self.llm_evaluator.top_k,
+            "max_output_tokens": 8192,  # Increased from 4096 to handle full JSON responses
+            "response_mime_type": "application/json",
+            "response_schema": EvaluationResponse,  # Single, not batch
+        }
+        
+        if self.llm_evaluator._cache_name:
+            config_params["cached_content"] = self.llm_evaluator._cache_name
+        
+        async def eval_single(idx: int, prompt: str) -> tuple:
+            """Evaluate single completion, return (index, SemanticEvaluation)."""
+            # Unique inference_id: run.step.R.idx (R=Remote/Gemini)
+            # Short run suffix for log readability (last 6 chars of run_id)
+            run_suffix = self.run_id[-6:] if self.run_id else "norun"
+            inference_id = f"{run_suffix}.{step_id}.R.{idx}"
+            
+            async with self._semaphore:
+                inf_start = time.time()
+                self._gemini_log.debug(f"[inf_id={inference_id}] ACQUIRED semaphore, starting API call")
+                
+                try:
+                    response = await self.llm_evaluator.client.aio.models.generate_content(
+                        model=self.llm_evaluator.model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(**config_params),
+                    )
+                    inf_elapsed = time.time() - inf_start
+                    
+                    raw = response.text or ""
+                    
+                    # Extract finish reason and response metadata
+                    finish_reason = None
+                    response_id = None
+                    if response.candidates and len(response.candidates) > 0:
+                        finish_reason = response.candidates[0].finish_reason
+                        if hasattr(response, 'response_id'):
+                            response_id = response.response_id
+                    
+                    # Log call completion with full details
+                    self._gemini_log.info(
+                        f"[inf_id={inference_id}] API_COMPLETE: {inf_elapsed:.1f}s, "
+                        f"finish={finish_reason}, len={len(raw)}, resp_id={response_id}"
+                    )
+                    
+                    if str(finish_reason) != "FinishReason.STOP":
+                        self._gemini_log.warning(
+                            f"[inf_id={inference_id}] NON-STOP FINISH: {finish_reason}, response may be truncated"
+                        )
+                    
+                    eval_result = self.llm_evaluator._parse_single_response(
+                        raw, expected_judgment, surface_analyses[idx]
+                    )
+                    
+                    self._gemini_log.debug(
+                        f"[inf_id={inference_id}] PARSED: correct={eval_result.judgment_correct}, "
+                        f"scores=[cond={eval_result.condition_identification_score:.2f}, "
+                        f"ev={eval_result.evidence_mapping_score:.2f}, "
+                        f"rev={eval_result.reversion_score:.2f}]"
+                    )
+                    
+                    # Log structured inference record for remote call
+                    if self._run_logger and HAS_INFERENCE_RECORD:
+                        from datetime import datetime
+                        record = InferenceRecord(
+                            run_id=self.run_id,
+                            step_id=step_id,
+                            inference_id=inference_id,
+                            inference_type="remote",
+                            inference_idx=idx,
+                            start_time=datetime.fromtimestamp(inf_start).isoformat(),
+                            end_time=datetime.now().isoformat(),
+                            duration_s=inf_elapsed,
+                            status="completed",
+                            finish_reason=str(finish_reason) if finish_reason else None,
+                            response_len=len(raw),
+                            response_id=response_id,
+                            judgment_correct=eval_result.judgment_correct,
+                            scores={
+                                "condition_identification": eval_result.condition_identification_score,
+                                "evidence_mapping": eval_result.evidence_mapping_score,
+                                "reasoning_validity": eval_result.reasoning_validity_score,
+                                "judgment_coherence": eval_result.judgment_coherence_score,
+                                "operational_fidelity": eval_result.operational_fidelity_score,
+                                "reversion": eval_result.reversion_score,
+                                "authentic_intent": eval_result.authentic_intent_score,
+                                "conciseness": eval_result.conciseness_score,
+                            },
+                            is_fallback=False,
+                        )
+                        self._run_logger.log_inference(record)
+                    
+                    return (idx, eval_result)
+                    
+                except Exception as e:
+                    inf_elapsed = time.time() - inf_start
+                    self._gemini_log.error(
+                        f"[inf_id={inference_id}] API_FAILED after {inf_elapsed:.1f}s: {type(e).__name__}: {e}"
+                    )
+                    fallback = self.llm_evaluator._create_fallback_evaluation(
+                        surface_analyses[idx], expected_judgment, str(e)
+                    )
+                    
+                    # Log failed inference record
+                    if self._run_logger and HAS_INFERENCE_RECORD:
+                        from datetime import datetime
+                        record = InferenceRecord(
+                            run_id=self.run_id,
+                            step_id=step_id,
+                            inference_id=inference_id,
+                            inference_type="remote",
+                            inference_idx=idx,
+                            start_time=datetime.fromtimestamp(inf_start).isoformat(),
+                            end_time=datetime.now().isoformat(),
+                            duration_s=inf_elapsed,
+                            status="failed",
+                            error=f"{type(e).__name__}: {e}",
+                            is_fallback=True,
+                        )
+                        self._run_logger.log_inference(record)
+                    
+                    return (idx, fallback)
+        
+        try:
+            # Fire all evaluations in parallel
+            tasks = [eval_single(i, p) for i, p in enumerate(individual_prompts)]
+            results = await asyncio.gather(*tasks)
+            
+            # Sort by index to maintain order
+            results.sort(key=lambda x: x[0])
+            semantic_evals = [r[1] for r in results]
+            
+            elapsed = time.time() - start
+            
+            # Log results
+            correct_count = sum(1 for e in semantic_evals if e.judgment_correct)
+            # Calculate timing stats
+            call_times = [r[1].eval_time if hasattr(r[1], 'eval_time') else 0 for r in results]
+            self._gemini_log.info(
+                f"[step={step_id}] PARALLEL COMPLETE: {correct_count}/{n} correct, "
+                f"wall_time={elapsed:.1f}s, calls={n}"
+            )
+            
+            # Log batch summary record
+            if self._run_logger and HAS_INFERENCE_RECORD:
+                from datetime import datetime
+                batch_record = InferenceRecord(
+                    run_id=self.run_id,
+                    step_id=step_id,
+                    inference_id=f"{self.run_id[-6:]}.{step_id}.R.BATCH",
+                    inference_type="remote_batch_summary",
+                    inference_idx=-1,  # -1 indicates batch summary
+                    start_time=datetime.fromtimestamp(start).isoformat(),
+                    end_time=datetime.now().isoformat(),
+                    duration_s=elapsed,
+                    status="completed",
+                    token_count=n,  # Using token_count to store batch size
+                    judgment_correct=correct_count == n,  # All correct?
+                    scores={"correct_count": correct_count, "total_count": n, "success_rate": correct_count / n},
+                )
+                self._run_logger.log_inference(batch_record)
+            
+            result = AsyncResult(
+                step_id=step_id,
+                semantic_evals=semantic_evals,
+                elapsed_seconds=elapsed,
+                success=True,
+            )
+            
+        except Exception as e:
+            elapsed = time.time() - start
+            self._gemini_log.error(f"[step={step_id}] PARALLEL FAILED after {elapsed:.1f}s: {e}")
+            
+            semantic_evals = [
+                self.llm_evaluator._create_fallback_evaluation(
+                    surface, expected_judgment, str(e)
+                )
+                for surface in surface_analyses
+            ]
+            
+            result = AsyncResult(
+                step_id=step_id,
+                semantic_evals=semantic_evals,
+                elapsed_seconds=elapsed,
+                success=False,
+                error=str(e),
+            )
+        
+        # Store result
+        with self._lock:
+            self._results[step_id] = result
+            self._pending.pop(step_id, None)
+            self._gemini_log.debug(f"[step={step_id}] Parallel result stored")
             
     def get_result(self, step_id: int, timeout: float = 120.0) -> AsyncResult:
         """
@@ -441,6 +694,8 @@ class PipelinedHybridReward:
         correct_reward: float = 1.0,
         incorrect_reward: float = -0.5,
         no_judgment_reward: float = -0.3,
+        max_concurrent: int = 5,
+        run_id: str = "",
     ):
         """
         Initialize pipelined reward function.
@@ -453,9 +708,13 @@ class PipelinedHybridReward:
             correct_reward: Reward for correct judgment
             incorrect_reward: Reward for incorrect judgment
             no_judgment_reward: Reward for missing judgment
+            max_concurrent: Max parallel Gemini API calls (default 5)
+            run_id: Unique run identifier for logging
         """
         self.llm_evaluator = llm_evaluator
         self.surface_analyzer = surface_analyzer or SurfaceAnalyzer()
+        self.max_concurrent = max_concurrent
+        self._run_id = run_id
         
         self.correctness_weight = correctness_weight
         self.semantic_weight = semantic_weight
@@ -466,12 +725,25 @@ class PipelinedHybridReward:
         # Async evaluator (created on start())
         self._async_eval: Optional[AsyncGeminiEvaluator] = None
         
+        # Run logger reference (set externally by trainer)
+        self._run_logger = None
+        
         # Cached data for reward computation
         self._step_data: Dict[int, Dict[str, Any]] = {}
         self._lock = Lock()
         
         # Logging
         self._eval_log = None
+    
+    @property
+    def run_id(self) -> str:
+        return self._run_id
+    
+    @run_id.setter
+    def run_id(self, value: str) -> None:
+        self._run_id = value
+        if self._async_eval:
+            self._async_eval.run_id = value
         
     def start(self) -> None:
         """Start async infrastructure. Must be called before fire_evaluation."""
@@ -479,11 +751,21 @@ class PipelinedHybridReward:
             return
             
         self._eval_log = get_eval_logger()
-        self._async_eval = AsyncGeminiEvaluator(self.llm_evaluator)
+        self._async_eval = AsyncGeminiEvaluator(
+            self.llm_evaluator, 
+            max_concurrent=self.max_concurrent,
+            run_id=self.run_id
+        )
         self._async_eval.start()
         
         self._eval_log.logger.info("PipelinedHybridReward started")
         
+    def set_run_logger(self, run_logger) -> None:
+        """Set the run logger for structured inference tracking."""
+        self._run_logger = run_logger
+        if self._async_eval:
+            self._async_eval.set_run_logger(run_logger)
+    
     def stop(self) -> None:
         """Stop async infrastructure. Call after training completes."""
         if self._async_eval:
@@ -536,7 +818,7 @@ class PipelinedHybridReward:
         mode: str = "",
         enhanced_context: str = "",
     ) -> str:
-        """Build Gemini batch evaluation prompt (same format as sync version)."""
+        """Build Gemini batch evaluation prompt (DEPRECATED - use individual prompts)."""
         n = len(completions)
         
         # Build completions section with numbered entries
@@ -560,6 +842,35 @@ class PipelinedHybridReward:
             enhanced_context=enhanced_context or "",
             completions_section=completions_section,
         )
+    
+    def _build_individual_prompts(
+        self,
+        completions: List[str],
+        proposition: str,
+        evidence: str,
+        oracle_conditions: str,
+        expected_judgment: str,
+        domain: str,
+        surface_analyses: List[SurfaceAnalysis],
+        mode: str = "",
+        enhanced_context: str = "",
+    ) -> List[str]:
+        """Build individual evaluation prompts for parallel processing."""
+        prompts = []
+        for comp, surface in zip(completions, surface_analyses):
+            prompt = EVALUATION_PROMPT_ENHANCED.format(
+                domain=domain,
+                mode=mode or "not specified",
+                proposition=proposition,
+                evidence=evidence,
+                conditions=oracle_conditions or "(not specified)",
+                expected_judgment=expected_judgment,
+                completion=comp,
+                surface_analysis=surface.to_prompt_section(),
+                enhanced_context=enhanced_context or "",
+            )
+            prompts.append(prompt)
+        return prompts
         
     def fire_evaluation(
         self,
@@ -605,13 +916,12 @@ class PipelinedHybridReward:
         # Run surface analysis locally (fast)
         surface_analyses = self.run_surface_analysis(completions, domain)
         
-        # Build prompt
-        prompt = self._build_batch_prompt(
+        # Build INDIVIDUAL prompts for parallel evaluation (avoids batch homogenization)
+        individual_prompts = self._build_individual_prompts(
             completions=completions,
             proposition=proposition,
             evidence=evidence,
             oracle_conditions=oracle_conditions,
-            oracle_temporal_context=oracle_temporal_context,
             expected_judgment=expected_judgment,
             domain=domain,
             surface_analyses=surface_analyses,
@@ -627,13 +937,14 @@ class PipelinedHybridReward:
                 "expected_judgment": expected_judgment,
             }
             
-        # Fire async request
+        # Fire async request with individual prompts (parallel independent calls)
         self._async_eval.fire_request(
             step_id=step_id,
-            user_prompt=prompt,
+            user_prompt="",  # Not used when individual_prompts provided
             completions=completions,
             surface_analyses=surface_analyses,
             expected_judgment=expected_judgment,
+            individual_prompts=individual_prompts,  # NEW: enables parallel mode
         )
         
         return surface_analyses
@@ -662,15 +973,20 @@ class PipelinedHybridReward:
         # Wait for Gemini result
         result = self._async_eval.get_result(step_id, timeout=timeout)
         
-        # Compute rewards
-        rewards = []
-        expected = step_data["expected_judgment"]
+        # Check for fallbacks - if any eval is fallback, discard entire batch
+        # Fallback evals have zero variance (identical scores) → zero gradient → wasted step
+        has_fallback = any(sem.is_fallback for sem in result.semantic_evals)
+        if has_fallback:
+            if self._eval_log:
+                self._eval_log.logger.warning(
+                    f"Step {step_id}: Discarding batch due to Gemini parse failure (fallback evals)"
+                )
+            return None  # Signal to skip this step
         
-        for surface, semantic in zip(
-            step_data["surface_analyses"],
-            result.semantic_evals,
-        ):
-            reward = self._compute_reward(surface, semantic, expected)
+        # Compute rewards using Gemini's judgment_correct (no surface analyzer needed)
+        rewards = []
+        for semantic in result.semantic_evals:
+            reward = self._compute_reward(semantic)
             rewards.append(reward)
             
         # Log batch summary
@@ -678,10 +994,11 @@ class PipelinedHybridReward:
             import statistics
             mean_r = statistics.mean(rewards) if rewards else 0.0
             std_r = statistics.stdev(rewards) if len(rewards) > 1 else 0.0
+            correct_count = sum(1 for sem in result.semantic_evals if sem.judgment_correct)
             self._eval_log.log_batch_summary(
                 len(rewards), rewards, mean_r, std_r,
-                correct_count=sum(1 for r in rewards if r > 0.5),
-                failure_count=sum(1 for r in rewards if r <= 0.5),
+                correct_count=correct_count,
+                failure_count=len(rewards) - correct_count,
             )
             
         return rewards
@@ -694,21 +1011,17 @@ class PipelinedHybridReward:
         
     def _compute_reward(
         self,
-        surface: SurfaceAnalysis,
         semantic: SemanticEvaluation,
-        expected_judgment: str,
     ) -> float:
-        """Compute single reward from surface + semantic analysis."""
-        # Correctness component
-        if surface.judgment_extracted is None:
-            correctness = self.no_judgment_reward
-        elif surface.judgment_extracted.lower() == expected_judgment.lower():
-            correctness = self.correct_reward
-            # Reduce for fallback evaluations (lower confidence)
-            if semantic.is_fallback:
-                correctness *= 0.5
-        else:
-            correctness = self.incorrect_reward
+        """Compute reward from Gemini's semantic evaluation.
+        
+        Uses Gemini's judgment_correct (not surface extraction) because:
+        - Gemini can interpret varied judgment formats (quotes, markdown, etc.)
+        - Surface regex extraction is brittle and introduces systematic errors
+        - Fallback batches are now discarded, so we always have valid semantic evals
+        """
+        # Correctness from Gemini's assessment
+        correctness = self.correct_reward if semantic.judgment_correct else self.incorrect_reward
             
         # Composite reward
         reward = (
